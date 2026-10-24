@@ -8,6 +8,8 @@ package metrics
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/shashankpatil-dev/sftpgate/internal/config"
 )
 
 // UnknownAccount is the account label used when a login names no real account.
@@ -71,3 +73,39 @@ var (
 		Help: "Always 1. The labels tell which config is running.",
 	}, []string{"hash", "revision"})
 )
+
+// Operation names used in the "op" label.
+var ops = []string{"upload", "download", "delete", "rename", "mkdir", "rmdir", "list"}
+
+// Prepare creates, at zero, every series the config can produce.
+//
+// A counter that only appears when its first event happens loses that
+// event: rate() and increase() have no earlier value to compare with, so
+// the dashboard shows nothing and alerts don't fire. Call Prepare at
+// startup and after every reload.
+func Prepare(cfg *config.Config) {
+	for _, result := range []string{"accepted", "rejected_ip", "rejected_throttle"} {
+		Connections.WithLabelValues(result)
+	}
+	for _, result := range []string{"ok", "error"} {
+		ConfigReloads.WithLabelValues(result)
+	}
+	Auth.WithLabelValues(UnknownAccount, "any", "failed")
+
+	for name := range cfg.Storages {
+		StorageErrors.WithLabelValues(name)
+	}
+
+	for _, a := range cfg.Accounts {
+		SessionsActive.WithLabelValues(a.Name)
+		for _, f := range a.Folders {
+			for _, op := range ops {
+				for _, result := range []string{"ok", "denied", "failed"} {
+					Operations.WithLabelValues(a.Name, f.Path, op, result)
+				}
+			}
+			TransferBytes.WithLabelValues(a.Name, f.Path, "in")
+			TransferBytes.WithLabelValues(a.Name, f.Path, "out")
+		}
+	}
+}

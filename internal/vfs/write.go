@@ -57,8 +57,7 @@ func (h *Handler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	}
 
 	spoolDir := h.Config.Server.SpoolDir
-	if free, err := freeSpace(spoolDir); err == nil {
-		metrics.SpoolFree.Set(float64(free))
+	if free, err := FreeSpace(spoolDir); err == nil {
 		if free < int64(h.Config.Server.MinSpoolFree) {
 			return nil, h.finish(e, t, errSpoolFull)
 		}
@@ -199,11 +198,14 @@ func checksums(r io.Reader) (sha, md5sum []byte, err error) {
 	return s.Sum(nil), m.Sum(nil), nil
 }
 
-// freeSpace returns the free bytes on the disk that holds dir.
-func freeSpace(dir string) (int64, error) {
+// FreeSpace returns the free bytes on the disk that holds dir, and
+// publishes the number as the spool free-space metric.
+func FreeSpace(dir string) (int64, error) {
 	var st unix.Statfs_t
 	if err := unix.Statfs(dir, &st); err != nil {
 		return 0, err
 	}
-	return int64(st.Bavail) * st.Bsize, nil
+	free := int64(st.Bavail) * st.Bsize
+	metrics.SpoolFree.Set(float64(free))
+	return free, nil
 }

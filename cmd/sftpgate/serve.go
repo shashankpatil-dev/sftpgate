@@ -19,6 +19,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/server"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 	"github.com/shashankpatil-dev/sftpgate/internal/web"
 )
 
@@ -50,6 +51,7 @@ func serve(path string) error {
 	srv := server.New(r.current.Load, buckets)
 	r.server = srv
 	setConfigInfo(cfg)
+	metrics.Prepare(cfg)
 
 	ln, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
@@ -66,6 +68,7 @@ func serve(path string) error {
 		}
 	}()
 	go r.run(ctx, cfg.Server.ReloadInterval)
+	go watchSpool(ctx, cfg.Server.SpoolDir)
 
 	slog.Info("sftpgate started", "version", version, "sftp", cfg.Server.Listen, "http", cfg.HTTP.Listen, "config", cfg.Hash)
 	err = srv.Serve(ctx, ln, shutdownGrace)
@@ -92,6 +95,23 @@ func prepareSpool(dir string) error {
 		slog.Warn("removed unfinished uploads from a previous run", "count", len(leftovers))
 	}
 	return nil
+}
+
+// watchSpool keeps the spool free-space metric fresh, so an alert can warn
+// before the disk fills up, even when no uploads are happening.
+func watchSpool(ctx context.Context, dir string) {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for {
+		if _, err := vfs.FreeSpace(dir); err != nil {
+			slog.Warn("cannot read spool free space", "dir", dir, "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // reloader watches the config file and swaps in new versions.
@@ -158,6 +178,7 @@ func (r *reloader) reload(ctx context.Context, force bool) {
 	r.current.Store(cfg)
 	r.server.CloseChanged(cfg)
 	setConfigInfo(cfg)
+	metrics.Prepare(cfg)
 	metrics.ConfigReloads.WithLabelValues(audit.OK).Inc()
 	audit.Emit(audit.Event{Event: "config_reload", Result: audit.OK, Config: cfg.Hash})
 	slog.Info("config reloaded", "config", cfg.Hash)

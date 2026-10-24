@@ -51,7 +51,7 @@ flowchart TD
   SRV & VFS & ACT & JOB --> MET["metrics"]
 ```
 
-`config`, `audit` and `metrics` import nothing internal, so there are no import cycles.
+`config` and `audit` import nothing internal. `metrics` imports only `config` (to create every series at zero, see 8). There are no import cycles.
 
 Line budget (non-test Go, v0.1): config ~600, server ~500, vfs ~700, storage ~80, audit ~60, metrics ~80, web ~80, main ~120. **Total ≈ 2,200.**
 
@@ -879,6 +879,8 @@ Audit and operational logs share stdout. They are distinguished by `msg:"audit"`
 
 Cardinality is bounded: `account`, `folder`, `storage`, `step` and `job` all come from config. IPs and paths are never labels.
 
+`metrics.Prepare(cfg)` runs at startup and after every reload. It creates every series the config can produce at 0. Without it, the first event of each counter is lost: `rate()` and `increase()` need an earlier sample, so a first storage error would never show on the dashboard or fire an alert.
+
 ---
 
 ## 8a. Traces [v0.2]
@@ -1104,7 +1106,7 @@ CMD ["serve"]
 ```
 
 ### 14.2 Compose (dev/test)
-- `sftpgate`: build `.`, ports `2222:2222`, `8080:8080`, mounts `./examples/dev.yaml:/etc/sftpgate/sftpgate.yaml:ro`, `./.dev/keys:/etc/sftpgate/keys:ro`, volume `spool`, `read_only: true`.
+- `sftpgate`: build `.`, ports `2222:2222`, `8080:8080`, mounts the **folder** `./config:/etc/sftpgate/config:ro` (not a single file: editors and git replace files, and a single-file bind mount keeps showing the old one, which silently breaks hot reload), `./.dev/keys:/etc/sftpgate/keys:ro`, volume `spool`, `read_only: true`.
 - `s3` (`adobe/s3mock`, creates the bucket on start). MinIO no longer publishes the community images used for this.
 - `fake-gcs` (`fsouza/fake-gcs-server`, **`-backend memory`**, because its disk backend drops `dir/` marker objects), with `STORAGE_EMULATOR_HOST` set for sftpgate.
 - `prometheus`, `grafana` (provisioned datasource + `sftpgate.json` dashboard) **[v0.2]**.

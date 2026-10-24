@@ -301,3 +301,10 @@ func names(fis []os.FileInfo) []string {
 	}
 	return out
 }
+
+func TestFreeSpace(t *testing.T) {
+	free, err := vfs.FreeSpace(t.TempDir())
+	if err != nil || free <= 0 {
+		t.Fatalf("free space = %d, %v", free, err)
+	}
+}
