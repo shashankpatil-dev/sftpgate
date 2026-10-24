@@ -227,19 +227,33 @@ func clientError(t *target, err error) error {
 		errors.Is(err, sftp.ErrSSHFxOpUnsupported),
 		errors.As(err, &status):
 		return err
+	case errors.Is(err, storage.ErrNotKept):
+		// Checked before "not found": the read-back after a save can say
+		// not found, but for the partner it means "send it again".
+		countStorageError(t, err)
+		return errUploadAgain
 	case gcerrors.Code(err) == gcerrors.NotFound:
 		return sftp.ErrSSHFxNoSuchFile
 	case errors.Is(err, errTooLarge), errors.Is(err, errNotEmpty), errors.Is(err, errSpoolFull), errors.Is(err, storage.ErrExists):
 		return err
 	}
 
+	countStorageError(t, err)
+	return sftp.ErrSSHFxFailure
+}
+
+// errUploadAgain tells the partner a save didn't stick and should be retried.
+var errUploadAgain = errors.New("the storage did not keep the file, please upload it again")
+
+// countStorageError logs a storage failure and counts it for alerts.
+// Details are logged only, never sent to the client.
+func countStorageError(t *target, err error) {
 	storageName := ""
 	if t != nil && t.folder != nil {
 		storageName = t.folder.Storage
 	}
 	metrics.StorageErrors.WithLabelValues(storageName).Inc()
 	slog.Error("storage error", "storage", storageName, "err", err)
-	return sftp.ErrSSHFxFailure
 }
 
 // clientMessage is the short error text that goes into the audit log.
