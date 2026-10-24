@@ -55,6 +55,8 @@ services:
     environment:
       COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: recon-raw
 
+  # Known emulator limit: listings stop at 1000 objects (no next-page token).
+  # Real GCS pages normally, and the S3 mock lists any number of files.
   fake-gcs:
     image: fsouza/fake-gcs-server:1.52.2
     command: ["-scheme", "http", "-port", "4443", "-public-host", "fake-gcs:4443", "-backend", "memory", "-data", "/data"]

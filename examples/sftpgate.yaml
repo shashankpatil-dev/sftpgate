@@ -66,6 +66,8 @@ accounts:
           - pgp_decrypt:
               key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
               passphrase: "${env:RECON_PGP_PASSPHRASE}"
+              # Only accept files signed by Razorpay's own key.
+              signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
           - copy:
               storage: warehouse
               key: "razorpay/{date}/{filename}"

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -306,5 +307,31 @@ func TestFreeSpace(t *testing.T) {
 	free, err := vfs.FreeSpace(t.TempDir())
 	if err != nil || free <= 0 {
 		t.Fatalf("free space = %d, %v", free, err)
+	}
+}
+
+// Listings are streamed page by page, so even very large folders list fully.
+// (They used to stop at 10,000 entries.)
+func TestLargeDirectoryListsEverything(t *testing.T) {
+	e := newEnv(t)
+	const files = 12_000
+	ctx := context.Background()
+	for i := range files {
+		if err := e.bucket.WriteAll(ctx, fmt.Sprintf("acme/out/big/f%05d.csv", i), []byte("x"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The folder's own marker object must not show up as an entry.
+	_ = e.bucket.WriteAll(ctx, "acme/out/big/", nil, nil)
+
+	entries, err := e.client.ReadDir("/outbound/big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != files {
+		t.Fatalf("listed %d entries, want %d", len(entries), files)
+	}
+	if entries[0].Name() != "f00000.csv" || entries[files-1].Name() != "f11999.csv" {
+		t.Fatalf("unexpected first/last entries %s, %s", entries[0].Name(), entries[files-1].Name())
 	}
 }

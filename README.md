@@ -59,7 +59,7 @@ folders:
 
 | Step | What it does |
 |---|---|
-| `pgp_decrypt` | Decrypts the file (armored or binary). Strips `.pgp`, `.gpg` or `.asc` from the name. |
+| `pgp_decrypt` | Decrypts the file (armored or binary). Strips `.pgp`, `.gpg` or `.asc` from the name. With `signer_keys` (the partner's public keys), the file must also be signed by one of them; unsigned files and unknown signers are rejected. |
 | `pgp_encrypt` | Encrypts for `recipients` (armored public keys) and adds `.pgp`. |
 | `copy` | Saves the file to a storage. The key can use `{account}`, `{folder}`, `{date}`, `{time}`, `{filename}` and `{job_id}`. |
 | `webhook` | POSTs JSON describing the upload and the copies made so far. With a `secret`, the body is signed in the `X-Sftpgate-Signature: sha256=<hex HMAC>` header. |
