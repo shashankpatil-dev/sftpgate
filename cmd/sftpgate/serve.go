@@ -98,10 +98,11 @@ func serve(path string) error {
 	go watchSpool(ctx, cfg.Server.SpoolDir)
 	go runner.Run(ctx)
 
-	// With several replicas, set SFTPGATE_TRANSFERS=off on all but one, so
-	// each scheduled transfer runs once.
-	if os.Getenv("SFTPGATE_TRANSFERS") != "off" {
+	host, _ := os.Hostname()
+	if transfers.EnabledHere(os.Getenv, host) {
 		go transfers.NewScheduler(r.current.Load, buckets, cfg.Server.SpoolDir).Run(ctx)
+	} else if len(cfg.Transfers) > 0 {
+		slog.Info("scheduled transfers run on another replica", "host", host)
 	}
 
 	slog.Info("sftpgate started", "version", version, "sftp", cfg.Server.Listen, "http", cfg.HTTP.Listen, "config", cfg.Hash)

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	// The container image has no time zone files, so embed them for server.timezone.
 	_ "time/tzdata"
@@ -27,6 +29,7 @@ Usage:
   sftpgate serve [-config FILE]         run the server
   sftpgate validate [-offline] FILE     check a config file
   sftpgate hash-password [-cost N]      make a bcrypt hash for password_hash
+  sftpgate healthcheck [-url URL]       exit 0 if the server answers /healthz
   sftpgate version                      print the version
 `
 
@@ -44,6 +47,8 @@ func main() {
 		err = validateCmd(args)
 	case "hash-password":
 		err = hashPasswordCmd(args)
+	case "healthcheck":
+		err = healthcheckCmd(args)
 	case "version":
 		fmt.Println(version)
 	default:
@@ -82,6 +87,25 @@ func validateCmd(args []string) error {
 		return fmt.Errorf("%s is not valid:\n%w", fs.Arg(0), err)
 	}
 	fmt.Println(fs.Arg(0), "is valid")
+	return nil
+}
+
+// healthcheckCmd asks the running server if it is alive. The container
+// image has no shell or curl, so Docker's HEALTHCHECK runs this instead.
+func healthcheckCmd(args []string) error {
+	fs := flag.NewFlagSet("healthcheck", flag.ExitOnError)
+	url := fs.String("url", "http://127.0.0.1:8080/healthz", "health URL to check")
+	_ = fs.Parse(args)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(*url)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %s", *url, resp.Status)
+	}
 	return nil
 }
 

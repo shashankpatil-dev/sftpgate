@@ -14,5 +14,7 @@ COPY --from=build /out/sftpgate /sftpgate
 # The spool folder must belong to the non-root user (65532) so uploads can be written.
 COPY --from=build --chown=65532:65532 /out/spool /var/lib/sftpgate/spool
 EXPOSE 2222 8080
+# The image has no shell or curl, so the binary checks its own /healthz.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/sftpgate", "healthcheck"]
 ENTRYPOINT ["/sftpgate"]
 CMD ["serve"]
