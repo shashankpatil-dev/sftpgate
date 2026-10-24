@@ -74,10 +74,17 @@ service:
     annotations: {}
 
 persistence:
-  # The spool (uploads in progress) and the post-upload action queue live
-  # here. Without it, a pod restart loses queued actions.
+  # Files never stay here: buckets hold the data. This disk is a waiting room
+  # for uploads in progress (each is sent to the bucket when the partner
+  # finishes it) and for post-upload work, plus the small action queue.
+  # Without persistence, a pod restart loses queued actions.
+  #
+  # Size it as: largest max_file_size x uploads at the same time, plus room
+  # for post-upload work. For example 500MiB x 4 = 2GiB. An upload only
+  # starts if its whole max_file_size fits, so a full disk refuses new
+  # uploads cleanly instead of breaking them halfway.
   enabled: true
-  size: 10Gi
+  size: 2Gi
   storageClass: ""
   accessModes: [ReadWriteOnce]
 

@@ -85,8 +85,8 @@ func (c *checker) server(cfg *Config) {
 
 	cfg.GlobalIPs = c.prefixes("server.allow_ips", s.AllowIPs)
 
-	if s.MaxAuthTries < 1 || s.Throttle.MaxFailures < 1 {
-		c.fail("server", "max_auth_tries and throttle.max_failures must be at least 1")
+	if s.MaxAuthTries < 1 || s.Throttle.MaxFailures < 1 || s.MaxConnections < 1 {
+		c.fail("server", "max_auth_tries, max_connections and throttle.max_failures must be at least 1")
 	}
 
 	loc, err := time.LoadLocation(s.Timezone)

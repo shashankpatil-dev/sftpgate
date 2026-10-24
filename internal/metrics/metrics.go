@@ -104,7 +104,7 @@ var ops = []string{"upload", "download", "delete", "rename", "mkdir", "rmdir", "
 // the dashboard shows nothing and alerts don't fire. Call Prepare at
 // startup and after every reload.
 func Prepare(cfg *config.Config) {
-	for _, result := range []string{"accepted", "rejected_ip", "rejected_throttle"} {
+	for _, result := range []string{"accepted", "rejected_ip", "rejected_throttle", "rejected_limit"} {
 		Connections.WithLabelValues(result)
 	}
 	for _, result := range []string{"ok", "error"} {

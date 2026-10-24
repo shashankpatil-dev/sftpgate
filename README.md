@@ -239,6 +239,23 @@ accounts:
 Folder permissions: `list`, `download`, `upload`, `overwrite`, `delete`,
 `rename`, `mkdir`.
 
+Without `overwrite`, a file can never be replaced, even when two partners
+upload the same name at the same moment: the bucket itself refuses the second
+save, and that partner gets "file already exists".
+
+### Limits
+
+| Setting | Default | What it protects |
+|---|---|---|
+| `server.max_connections` | 1000 | the server, from a flood of connections from all accounts together |
+| `accounts[].max_sessions` | no limit | one account from using up the server |
+| `folders[].max_file_size` | no limit | the disk, from one huge file; an upload only starts if this much space is free |
+| `server.min_spool_free` | 1GiB | free disk left over for everything else |
+| `server.throttle` | 5 failures / 10m, blocked 15m | logins, from password guessing |
+
+Uploads wait on local disk until complete, then go to the bucket in one step.
+Size that disk as largest `max_file_size` × uploads at the same time.
+
 ### Secrets
 
 The YAML never holds secret values. Secret fields take a reference that is

@@ -39,12 +39,16 @@ type Config struct {
 
 // Server holds the SFTP listener settings.
 type Server struct {
-	Listen         string        `yaml:"listen"`
-	HostKeys       []string      `yaml:"host_keys"`
-	AllowIPs       []string      `yaml:"allow_ips"`
-	Banner         string        `yaml:"banner"`
-	IdleTimeout    time.Duration `yaml:"idle_timeout"`
-	MaxAuthTries   int           `yaml:"max_auth_tries"`
+	Listen       string        `yaml:"listen"`
+	HostKeys     []string      `yaml:"host_keys"`
+	AllowIPs     []string      `yaml:"allow_ips"`
+	Banner       string        `yaml:"banner"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	MaxAuthTries int           `yaml:"max_auth_tries"`
+
+	// MaxConnections caps open connections across all accounts, so a flood
+	// of logins can't use up the server's memory.
+	MaxConnections int           `yaml:"max_connections"`
 	SpoolDir       string        `yaml:"spool_dir"`
 	MinSpoolFree   Size          `yaml:"min_spool_free"`
 	ReloadInterval time.Duration `yaml:"reload_interval"`

@@ -50,6 +50,9 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	wg       sync.WaitGroup
+
+	// conns counts open TCP connections, logged in or not.
+	conns atomic.Int64
 }
 
 // session is one logged-in SSH connection.
@@ -149,7 +152,14 @@ func (s *Server) handle(c net.Conn) {
 	ip := remoteIP(c)
 	ev := audit.Event{IP: ip.String(), Config: cfg.Hash}
 
+	open := s.conns.Add(1)
+	defer s.conns.Add(-1)
+
 	// Cheap checks first, before spending any CPU on SSH crypto.
+	if open > int64(cfg.Server.MaxConnections) {
+		s.reject(ev, "rejected_limit", "too many connections")
+		return
+	}
 	if !config.AllowsIP(cfg.GlobalIPs, ip) {
 		s.reject(ev, "rejected_ip", "ip not allowed")
 		return

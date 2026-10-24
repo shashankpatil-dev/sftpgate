@@ -368,6 +368,38 @@ func TestMaxSessions(t *testing.T) {
 	}
 }
 
+func TestMaxConnections(t *testing.T) {
+	h := newHarness(t, func(s string) string {
+		return strings.Replace(s, "  spool_dir:", "  max_connections: 1\n  spool_dir:", 1)
+	})
+	first, err := h.dial("keyuser", h.withKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	if c, err := h.dial("pwuser", h.withPassword()); err == nil {
+		_ = c.Close()
+		t.Fatal("a second connection must be refused when max_connections is 1")
+	}
+	h.audit.waitFor(t, `"error":"too many connections"`)
+
+	// Once the first connection closes, there is room again.
+	_ = first.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := h.dial("pwuser", h.withPassword())
+		if err == nil {
+			_ = c.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connection still refused after the first one closed: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestReloadClosesOnlyChangedAccounts(t *testing.T) {
 	h := newHarness(t, nil)
 	keyConn, err := h.dial("keyuser", h.withKey())
