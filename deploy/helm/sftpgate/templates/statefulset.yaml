@@ -6,7 +6,9 @@ metadata:
   labels:
     {{- include "sftpgate.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   serviceName: {{ $fullname }}-pods
   # Pods start and stop together; their order doesn't matter.
   podManagementPolicy: Parallel
@@ -66,7 +68,7 @@ spec:
           env:
             - name: SFTPGATE_CONFIG
               value: {{ include "sftpgate.configPath" . }}
-            {{- if gt (int .Values.replicas) 1 }}
+            {{- if or .Values.autoscaling.enabled (gt (int .Values.replicas) 1) }}
             # Scheduled transfers run on the first pod only, so each runs once.
             - name: SFTPGATE_TRANSFERS_ONLY_ON
               value: {{ $fullname }}-0
@@ -114,6 +116,9 @@ spec:
             {{- range .Values.secretFiles }}
             - { name: {{ printf "secret-%s" .secretName | trunc 63 }}, mountPath: {{ .mountPath }}, readOnly: true }
             {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
         {{- if .Values.gitSync.enabled }}
         - name: git-sync
           image: {{ .Values.gitSync.image }}
@@ -150,6 +155,9 @@ spec:
             secretName: {{ .secretName }}
             defaultMode: 0440
         {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- if not .Values.persistence.enabled }}
         # Without persistence, queued post-upload actions are lost when the pod restarts.
         - { name: data, emptyDir: {} }
@@ -165,6 +173,13 @@ spec:
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
       {{- end }}
   {{- if .Values.persistence.enabled }}
   volumeClaimTemplates:

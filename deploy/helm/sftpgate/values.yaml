@@ -21,7 +21,18 @@ imagePullSecrets: []
 
 # More than one replica: each pod gets its own disk, scheduled transfers run
 # only on the first pod, and the load balancer spreads sessions.
+# Not used when autoscaling is enabled.
 replicas: 1
+
+# Add or remove pods with CPU load (a HorizontalPodAutoscaler).
+# Removing a pod disconnects the partners on it: uploads in progress are
+# dropped (never saved half-way) and clients retry. SFTP work is usually
+# light, so a fixed replica count is often simpler.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
 
 # The SFTPgate config, exactly as in sftpgate.yaml. Secrets go in as
 # ${env:NAME} or ${file:/path} references, never as values.
@@ -156,3 +167,11 @@ podLabels: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+# For example, spread pods across zones so one zone failing doesn't stop SFTP.
+topologySpreadConstraints: []
+priorityClassName: ""
+
+# Extra volumes and mounts for the SFTPgate container, for example a custom CA
+# bundle for a private S3 endpoint.
+extraVolumes: []
+extraVolumeMounts: []

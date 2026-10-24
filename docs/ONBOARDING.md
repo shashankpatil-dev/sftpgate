@@ -730,7 +730,8 @@ At least one of `private_key` or `password` is needed. Give the partner your
 |---|---|---|
 | `image.repository` / `image.tag` / `image.pullPolicy` | `ghcr.io/shashankpatil-dev/sftpgate` / chart version / `IfNotPresent` | Which image to run |
 | `imagePullSecrets` | `[]` | For a private registry |
-| `replicas` | `1` | How many copies. With more than 1, transfers run on the first only. |
+| `replicas` | `1` | How many copies. With more than 1, transfers run on the first only. Ignored when autoscaling is on. |
+| `autoscaling.enabled` / `minReplicas` / `maxReplicas` / `targetCPUUtilizationPercentage` | off / `2` / `4` / `70` | A HorizontalPodAutoscaler on CPU. Transfers still run on one pod. It scales down slowly (one pod per 5 min), because removing a pod disconnects its partners. |
 | `config` | a minimal config | The full `sftpgate.yaml` |
 | `existingConfigMap` | empty | Use your own ConfigMap (key `sftpgate.yaml`) instead of `config` |
 | `hostKeys.existingSecret` | `sftpgate-host-keys` | Secret with the host key file(s) |
@@ -756,6 +757,8 @@ At least one of `private_key` or `password` is needed. Give the partner your
 | `resources` | 100m CPU, 128Mi requested, 512Mi limit | Pod size |
 | `terminationGracePeriodSeconds` | `45` | Time to finish uploads on shutdown |
 | `podAnnotations`, `podLabels`, `nodeSelector`, `tolerations`, `affinity` | empty | Standard pod placement settings |
+| `topologySpreadConstraints`, `priorityClassName` | empty | Spread pods across zones; give SFTPgate scheduling priority |
+| `extraVolumes`, `extraVolumeMounts` | empty | Mount anything else, for example a corporate CA bundle for a private S3 endpoint |
 
 Private git repository with a token:
 

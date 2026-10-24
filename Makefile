@@ -6,7 +6,8 @@ CHART   := deploy/helm/sftpgate
 SCHEMAS := -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 ALL_OPTIONS := --set gitSync.enabled=true --set gitSync.repo=https://example.com/config.git --set replicas=3 \
 	--set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true \
-	--set metrics.grafanaDashboard.enabled=true --set ingress.enabled=true --set podDisruptionBudget.enabled=true
+	--set metrics.grafanaDashboard.enabled=true --set ingress.enabled=true --set podDisruptionBudget.enabled=true \
+	--set autoscaling.enabled=true --set priorityClassName=high
 
 PROMETHEUS_IMAGE := prom/prometheus:v3.6.0
 
