@@ -5,7 +5,29 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to the same branch cancels the run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+          # Build the linter with this repo's Go. The prebuilt binary uses an
+          # older Go and refuses to lint code that needs a newer one.
+          install-mode: goinstall
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -13,26 +35,33 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.5.0
-      - name: Test
+      - name: Unit and integration tests
         run: go test -race ./...
-      - name: Check example configs
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Example configs are valid
         run: make validate
-      - name: Check monitoring config and alert rules
+      - name: Prometheus config and alert rule tests
         run: make check-monitoring
 
   e2e:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [lint, test, checks]
     steps:
       - uses: actions/checkout@v4
       - name: Start the local setup
         run: make up
-      - name: Run end-to-end checks
+      - name: End-to-end checks
         run: make e2e
-      - name: Show logs on failure
+      - name: Show logs if something failed
         if: failure()
         run: docker compose -f deploy/compose/docker-compose.yml logs
+      - name: Stop the local setup
+        if: always()
+        run: make down
