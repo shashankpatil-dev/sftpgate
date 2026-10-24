@@ -41,6 +41,9 @@ services:
       - ../../.dev/keys:/etc/sftpgate/keys:ro
       - spool:/var/lib/sftpgate/spool
     read_only: true
+    # The root filesystem is read-only; some storage drivers need a writable /tmp.
+    tmpfs:
+      - /tmp
     depends_on:
       s3:
         condition: service_started
@@ -70,7 +73,9 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # The alert rules and dashboard live in the Helm chart, so Docker and
+      # Kubernetes always ship the same ones.
+      - ../helm/sftpgate/files/alerts.yml:/etc/prometheus/alerts.yml:ro
     depends_on:
       - sftpgate
 
@@ -87,7 +92,7 @@ services:
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/sftpgate.json
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../helm/sftpgate/files/dashboard.json:/var/lib/grafana/dashboards/sftpgate.json:ro
     depends_on:
       - prometheus
 

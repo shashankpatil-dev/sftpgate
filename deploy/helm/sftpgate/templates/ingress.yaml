@@ -1,0 +1,37 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sftpgate.fullname" . }}
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # Only the UI and API. Metrics and health checks stay inside the cluster.
+          - path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sftpgate.fullname" . }}-http
+                port: { name: http }
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sftpgate.fullname" . }}-http
+                port: { name: http }
+{{- end }}

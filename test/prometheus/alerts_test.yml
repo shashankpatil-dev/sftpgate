@@ -3,7 +3,7 @@
 # Each test feeds made-up metric values over time and checks which alerts fire.
 
 rule_files:
-  - ../../deploy/compose/prometheus/alerts.yml
+  - ../../deploy/helm/sftpgate/files/alerts.yml
 
 evaluation_interval: 1m
 

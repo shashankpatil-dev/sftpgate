@@ -1,0 +1,64 @@
+# SFTP, for partners.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sftpgate.fullname" . }}
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+  {{- with .Values.service.sftp.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.sftp.type }}
+  {{- if ne .Values.service.sftp.type "ClusterIP" }}
+  externalTrafficPolicy: {{ .Values.service.sftp.externalTrafficPolicy }}
+  {{- end }}
+  {{- with .Values.service.sftp.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "sftpgate.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: sftp
+      port: {{ .Values.service.sftp.port }}
+      targetPort: sftp
+      protocol: TCP
+---
+# Metrics, health checks and the read-only UI and API, inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sftpgate.fullname" . }}-http
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+  {{- with .Values.service.http.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "sftpgate.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.http.port }}
+      targetPort: http
+      protocol: TCP
+---
+# Gives each StatefulSet pod a stable name, like sftpgate-0.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sftpgate.fullname" . }}-pods
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "sftpgate.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

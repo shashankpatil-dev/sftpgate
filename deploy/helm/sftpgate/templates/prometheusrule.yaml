@@ -1,0 +1,14 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "sftpgate.fullname" . }}
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # The same rules the Docker Compose setup uses.
+  {{- (.Files.Get "files/alerts.yml" | fromYaml) | toYaml | nindent 2 }}
+{{- end }}

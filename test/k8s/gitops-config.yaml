@@ -1,0 +1,15 @@
+# Config served from git in the kind smoke test's git-sync phase.
+version: 1
+server:
+  host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
+storages:
+  local: "file:///var/lib/sftpgate/data"
+accounts:
+  - name: demo
+    auth:
+      public_keys: ["${file:/etc/sftpgate/demo/demo_user.pub}"]
+    folders:
+      - path: /from-git
+        storage: local
+        prefix: demo/
+        perms: [list, upload, download]

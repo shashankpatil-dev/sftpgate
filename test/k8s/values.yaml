@@ -1,0 +1,53 @@
+# Values for the kind smoke test (test/k8s/smoke.sh).
+image:
+  repository: sftpgate
+  tag: test
+  pullPolicy: Never
+
+# Two pods: checks that transfers run on the first pod only.
+replicas: 2
+
+service:
+  sftp:
+    # kind has no cloud load balancer; the test uses port-forward.
+    type: ClusterIP
+
+persistence:
+  size: 1Gi
+
+secretEnv: [sftpgate-test-env]
+secretFiles:
+  - secretName: sftpgate-test-demo-key
+    mountPath: /etc/sftpgate/demo
+
+config: |
+  version: 1
+  server:
+    host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
+    reload_interval: 2s
+  http:
+    tokens: ["${env:UI_TOKEN}"]
+  storages:
+    # Test only: each pod's own disk. Real installs use a bucket.
+    local: "file:///var/lib/sftpgate/data"
+  accounts:
+    - name: demo
+      auth:
+        public_keys: ["${file:/etc/sftpgate/demo/demo_user.pub}"]
+      folders:
+        - path: /files
+          storage: local
+          prefix: demo/
+          perms: [list, upload, download, delete]
+  remotes:
+    nowhere:
+      addr: "127.0.0.1:1"
+      user: x
+      host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+      password: "${env:UI_TOKEN}"
+  transfers:
+    - name: yearly
+      schedule: "0 0 1 1 *"
+      pull:
+        from: { remote: nowhere, path: /out }
+        to: { storage: local, key: "x/{filename}" }

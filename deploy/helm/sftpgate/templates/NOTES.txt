@@ -1,0 +1,29 @@
+SFTPgate is installed as {{ include "sftpgate.fullname" . }}.
+
+Partners connect to the "{{ include "sftpgate.fullname" . }}" service on port {{ .Values.service.sftp.port }}.
+{{- if eq .Values.service.sftp.type "LoadBalancer" }}
+Find its public address with:
+  kubectl get service {{ include "sftpgate.fullname" . }} -n {{ .Release.Namespace }}
+{{- end }}
+
+Try it from your machine:
+  kubectl port-forward -n {{ .Release.Namespace }} service/{{ include "sftpgate.fullname" . }} 2222:{{ .Values.service.sftp.port }}
+  sftp -P 2222 <account>@localhost
+
+Metrics, health and the read-only UI (when http.tokens is set):
+  kubectl port-forward -n {{ .Release.Namespace }} service/{{ include "sftpgate.fullname" . }}-http 8080:{{ .Values.service.http.port }}
+  open http://localhost:8080/ui/
+
+Host key fingerprint, to send to partners:
+  kubectl get secret {{ .Values.hostKeys.existingSecret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.ssh_host_ed25519_key}' | base64 -d | ssh-keygen -lf /dev/stdin
+
+{{- if .Values.gitSync.enabled }}
+
+The config comes from {{ .Values.gitSync.repo }} ({{ .Values.gitSync.ref }}:{{ .Values.gitSync.path }}).
+Merged commits go live within {{ .Values.gitSync.period }}; broken ones are rejected.
+{{- else }}
+
+Config changes (helm upgrade) are picked up without a restart, usually within a minute.
+{{- end }}
+After changing the host key Secret, restart the pods:
+  kubectl rollout restart statefulset/{{ include "sftpgate.fullname" . }} -n {{ .Release.Namespace }}

@@ -1,9 +1,16 @@
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 LINT    := $(shell go env GOPATH)/bin/golangci-lint
+# Kubernetes tools: from PATH, or from .dev/bin if you keep them there.
+export PATH := $(CURDIR)/.dev/bin:$(PATH)
+CHART   := deploy/helm/sftpgate
+SCHEMAS := -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+ALL_OPTIONS := --set gitSync.enabled=true --set gitSync.repo=https://example.com/config.git --set replicas=3 \
+	--set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true \
+	--set metrics.grafanaDashboard.enabled=true --set ingress.enabled=true --set podDisruptionBudget.enabled=true
 
 PROMETHEUS_IMAGE := prom/prometheus:v3.6.0
 
-.PHONY: build test lint validate check-monitoring dev-keys up up-gitops down logs e2e
+.PHONY: build test lint validate check-monitoring dev-keys up up-gitops down logs e2e manifests check-k8s k8s-smoke
 
 ## build: compile the sftpgate binary into ./bin
 build:
@@ -28,6 +35,28 @@ check-monitoring:
 		check config --syntax-only /repo/deploy/compose/prometheus/prometheus.yml
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/test/prometheus --entrypoint promtool $(PROMETHEUS_IMAGE) \
 		test rules alerts_test.yml
+
+## manifests: regenerate the plain Kubernetes manifests from the Helm chart
+manifests:
+	@{ echo "# Generated from deploy/helm/sftpgate by 'make manifests'. Do not edit by hand."; \
+	  echo "# See deploy/kubernetes/README.md before applying."; \
+	  helm template sftpgate $(CHART) --namespace sftpgate; } > deploy/kubernetes/sftpgate.yaml
+
+## check-k8s: lint the chart, validate it against Kubernetes schemas, and check the manifests are up to date
+check-k8s:
+	helm lint $(CHART)
+	helm lint $(CHART) $(ALL_OPTIONS)
+	for v in 1.29.0 1.34.0; do \
+	  helm template t $(CHART) | kubeconform -strict -summary -kubernetes-version $$v $(SCHEMAS) || exit 1; \
+	  helm template t $(CHART) $(ALL_OPTIONS) | kubeconform -strict -summary -kubernetes-version $$v $(SCHEMAS) || exit 1; \
+	done
+	kubeconform -strict -summary -kubernetes-version 1.34.0 deploy/kubernetes/sftpgate.yaml
+	@$(MAKE) -s manifests && git diff --exit-code deploy/kubernetes/sftpgate.yaml \
+	  || (echo "deploy/kubernetes/sftpgate.yaml is out of date: run 'make manifests'" && exit 1)
+
+## k8s-smoke: install the chart on a local kind cluster and check it works
+k8s-smoke:
+	test/k8s/smoke.sh
 
 ## dev-keys: create a host key and a demo user key for local testing
 dev-keys:

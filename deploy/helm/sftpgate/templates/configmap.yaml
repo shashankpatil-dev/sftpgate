@@ -1,0 +1,11 @@
+{{- if and (not .Values.gitSync.enabled) (not .Values.existingConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sftpgate.fullname" . }}
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+data:
+  sftpgate.yaml: |
+    {{- .Values.config | nindent 4 }}
+{{- end }}

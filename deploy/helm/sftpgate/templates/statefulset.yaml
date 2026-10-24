@@ -1,0 +1,182 @@
+{{- $fullname := include "sftpgate.fullname" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "sftpgate.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  serviceName: {{ $fullname }}-pods
+  # Pods start and stop together; their order doesn't matter.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "sftpgate.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sftpgate.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "sftpgate.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Makes the data volume writable for the non-root user.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.gitSync.enabled }}
+      initContainers:
+        # Fetch the config once before SFTPgate starts, so it never starts without one.
+        - name: git-sync-first
+          image: {{ .Values.gitSync.image }}
+          env:
+            {{- include "sftpgate.gitSyncEnv" . | nindent 12 }}
+            - name: GITSYNC_ONE_TIME
+              value: "true"
+          securityContext:
+            {{- include "sftpgate.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - { name: git, mountPath: /git }
+            - { name: git-tmp, mountPath: /tmp }
+      {{- end }}
+      containers:
+        - name: sftpgate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [serve]
+          env:
+            - name: SFTPGATE_CONFIG
+              value: {{ include "sftpgate.configPath" . }}
+            {{- if gt (int .Values.replicas) 1 }}
+            # Scheduled transfers run on the first pod only, so each runs once.
+            - name: SFTPGATE_TRANSFERS_ONLY_ON
+              value: {{ $fullname }}-0
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.secretEnv }}
+          envFrom:
+            {{- range . }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - { name: sftp, containerPort: 2222, protocol: TCP }
+            - { name: http, containerPort: 8080, protocol: TCP }
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          # Not ready while a storage can't be reached, so no partner is sent to a broken pod.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- include "sftpgate.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/sftpgate }
+            # The root filesystem is read-only; some storage drivers need a writable /tmp.
+            - { name: tmp, mountPath: /tmp }
+            - { name: host-keys, mountPath: /etc/sftpgate/keys, readOnly: true }
+            {{- if .Values.gitSync.enabled }}
+            - { name: git, mountPath: /git, readOnly: true }
+            {{- else }}
+            # The whole folder, not a subPath: subPath mounts never see config updates.
+            - { name: config, mountPath: /etc/sftpgate/config, readOnly: true }
+            {{- end }}
+            {{- range .Values.secretFiles }}
+            - { name: {{ printf "secret-%s" .secretName | trunc 63 }}, mountPath: {{ .mountPath }}, readOnly: true }
+            {{- end }}
+        {{- if .Values.gitSync.enabled }}
+        - name: git-sync
+          image: {{ .Values.gitSync.image }}
+          env:
+            {{- include "sftpgate.gitSyncEnv" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            {{- include "sftpgate.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - { name: git, mountPath: /git }
+            - { name: git-tmp, mountPath: /tmp }
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: host-keys
+          secret:
+            secretName: {{ required "hostKeys.existingSecret is required" .Values.hostKeys.existingSecret }}
+            defaultMode: 0440
+        {{- if .Values.gitSync.enabled }}
+        - { name: git, emptyDir: {} }
+        - { name: git-tmp, emptyDir: {} }
+        {{- else }}
+        - name: config
+          configMap:
+            name: {{ .Values.existingConfigMap | default $fullname }}
+        {{- end }}
+        {{- range .Values.secretFiles }}
+        - name: {{ printf "secret-%s" .secretName | trunc 63 }}
+          secret:
+            secretName: {{ .secretName }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if not .Values.persistence.enabled }}
+        # Without persistence, queued post-upload actions are lost when the pod restarts.
+        - { name: data, emptyDir: {} }
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

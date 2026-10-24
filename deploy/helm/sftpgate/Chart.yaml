@@ -1,0 +1,11 @@
+apiVersion: v2
+name: sftpgate
+description: A secure SFTP gateway for partner file exchange, configured from one YAML file.
+type: application
+version: 0.1.0
+appVersion: "0.3.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/shashankpatil-dev/sftpgate
+sources:
+  - https://github.com/shashankpatil-dev/sftpgate
+keywords: [sftp, gateway, s3, gcs, gitops, file-transfer]

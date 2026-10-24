@@ -1,0 +1,151 @@
+# Default values for SFTPgate.
+#
+# Before installing, create the host key secret once. Keep it: partners pin
+# its fingerprint, and a new key looks like an attack to them.
+#
+#   ssh-keygen -t ed25519 -N "" -f ssh_host_ed25519_key
+#   kubectl create secret generic sftpgate-host-keys --from-file=ssh_host_ed25519_key
+#
+# Then put your sftpgate.yaml under `config` (or point to your own ConfigMap,
+# or use gitSync) and install:
+#
+#   helm install sftpgate deploy/helm/sftpgate -f my-values.yaml
+
+image:
+  repository: ghcr.io/shashankpatil-dev/sftpgate
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# More than one replica: each pod gets its own disk, scheduled transfers run
+# only on the first pod, and the load balancer spreads sessions.
+replicas: 1
+
+# The SFTPgate config, exactly as in sftpgate.yaml. Secrets go in as
+# ${env:NAME} or ${file:/path} references, never as values.
+# Changes are picked up without a restart (Kubernetes updates the mounted
+# file within about a minute).
+config: |
+  version: 1
+  server:
+    host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
+  storages:
+    local: "file:///var/lib/sftpgate/data"
+  accounts: []
+
+# Use your own ConfigMap instead of `config`. It must have a sftpgate.yaml key.
+existingConfigMap: ""
+
+hostKeys:
+  # Required. A Secret with the host key file(s), mounted at /etc/sftpgate/keys.
+  existingSecret: sftpgate-host-keys
+
+# Secrets loaded as environment variables, for ${env:NAME} references.
+secretEnv: []
+#  - sftpgate-secrets
+
+# Secrets mounted as files, for ${file:/path} references.
+secretFiles: []
+#  - secretName: recon-pgp
+#    mountPath: /etc/sftpgate/secrets/recon
+
+# Extra environment variables, for example OTEL_EXPORTER_OTLP_ENDPOINT or
+# AWS_REGION.
+env: []
+#  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+#    value: http://otel-collector.observability:4318
+
+service:
+  sftp:
+    # LoadBalancer gives partners a public address. Use NodePort or
+    # ClusterIP if you expose SFTP another way.
+    type: LoadBalancer
+    port: 22
+    # Local keeps the partner's real IP, which IP allowlists need.
+    externalTrafficPolicy: Local
+    # Cloud firewall rule in front of SFTPgate's own allowlists.
+    loadBalancerSourceRanges: []
+    annotations: {}
+  http:
+    # Metrics, health checks and (with http.tokens) the read-only UI and API.
+    port: 8080
+    annotations: {}
+
+persistence:
+  # The spool (uploads in progress) and the post-upload action queue live
+  # here. Without it, a pod restart loses queued actions.
+  enabled: true
+  size: 10Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+
+# Keep the config in a git repository, delivered by git-sync. When enabled,
+# `config` and `existingConfigMap` are not used.
+gitSync:
+  enabled: false
+  repo: ""
+  ref: main
+  # Path of sftpgate.yaml inside the repository.
+  path: sftpgate.yaml
+  period: 30s
+  image: registry.k8s.io/git-sync/git-sync:v4.4.2
+  # Credentials for a private repository, for example:
+  #  - name: GITSYNC_USERNAME
+  #    value: sftpgate-bot
+  #  - name: GITSYNC_PASSWORD
+  #    valueFrom: { secretKeyRef: { name: git-creds, key: token } }
+  extraEnv: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # For bucket access without keys: GKE workload identity, EKS IRSA or
+  # Azure workload identity annotations go here.
+  annotations: {}
+
+metrics:
+  # Needs the Prometheus Operator.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+  # A ConfigMap the Grafana sidecar picks up as a dashboard.
+  grafanaDashboard:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+
+# Ingress for the read-only web UI and API (needs http.tokens in the config).
+ingress:
+  enabled: false
+  className: ""
+  host: sftpgate.example.com
+  annotations: {}
+  tls: []
+  #  - secretName: sftpgate-ui-tls
+  #    hosts: [sftpgate.example.com]
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# Gives open sessions time to finish uploads on shutdown (SFTPgate waits 30s).
+terminationGracePeriodSeconds: 45
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
