@@ -7,9 +7,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+
+	// Registers /debug/pprof on the default mux, served only when SFTPGATE_PPROF is set.
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -105,6 +111,8 @@ func serve(path string) error {
 		slog.Info("scheduled transfers run on another replica", "host", host)
 	}
 
+	setMemoryLimit()
+	startProfiler()
 	slog.Info("sftpgate started", "version", version, "sftp", cfg.Server.Listen, "http", cfg.HTTP.Listen, "config", cfg.Hash)
 	err = srv.Serve(ctx, ln, shutdownGrace)
 
@@ -113,6 +121,43 @@ func serve(path string) error {
 	_ = httpSrv.Shutdown(shutdownCtx)
 	slog.Info("sftpgate stopped")
 	return err
+}
+
+// setMemoryLimit tells Go to stay under 90% of the container's memory
+// limit, so it cleans up memory before the container is killed for using
+// too much. GOMEMLIMIT, when set, wins. Outside a container nothing changes.
+func setMemoryLimit() {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	// cgroup v2, used by Docker and Kubernetes today. "max" means no limit.
+	b, err := os.ReadFile("/sys/fs/cgroup/memory.max")
+	if err != nil {
+		return
+	}
+	limit, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil || limit <= 0 {
+		return
+	}
+	debug.SetMemoryLimit(limit / 10 * 9)
+	slog.Info("memory limit set from the container", "limit_mb", limit/10*9/1e6)
+}
+
+// startProfiler serves Go's profiling pages (/debug/pprof) when
+// SFTPGATE_PPROF is set, like "127.0.0.1:6060". It is off by default and
+// meant for finding memory or CPU problems; keep it on localhost.
+func startProfiler() {
+	addr := os.Getenv("SFTPGATE_PPROF")
+	if addr == "" {
+		return
+	}
+	go func() {
+		slog.Warn("profiling endpoint is on", "addr", addr)
+		srv := &http.Server{Addr: addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 10 * time.Second}
+		if err := srv.ListenAndServe(); err != nil {
+			slog.Error("profiling endpoint stopped", "err", err)
+		}
+	}()
 }
 
 // prepareSpool makes sure the upload spool folder exists and is private, and

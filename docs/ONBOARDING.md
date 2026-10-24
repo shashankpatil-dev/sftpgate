@@ -509,7 +509,7 @@ transfers: [...]        # scheduled pulls and pushes
 | `banner` | empty | Message shown before login | For a legal notice |
 | `idle_timeout` | `15m` | Close connections idle this long | Lower for stricter security |
 | `max_auth_tries` | `6` | Login attempts per connection | Rarely |
-| `max_connections` | `1000` | Open connections, all accounts together | Raise for very busy servers |
+| `max_connections` | `25` | Open connections, all accounts together | Raise for busy servers; about 4× your normal peak is a good value |
 | `spool_dir` | `/var/lib/sftpgate/spool` | Where uploads wait until complete | Only outside the official image |
 | `min_spool_free` | `1GiB` | Free space always kept on the spool disk | Lower on small disks |
 | `reload_interval` | `10s` | How often to look for config changes | Rarely |

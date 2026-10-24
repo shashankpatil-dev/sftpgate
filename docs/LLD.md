@@ -90,7 +90,7 @@ server:
   banner: ""                                 # optional pre-auth banner
   idle_timeout: 15m                          # close idle sessions; default 15m
   max_auth_tries: 6                          # per connection; default 6 (same as OpenSSH)
-  max_connections: 1000                      # all accounts together; default 1000
+  max_connections: 25                        # all accounts together; default 25
   spool_dir: /var/lib/sftpgate/spool         # default
   min_spool_free: 1GiB                       # refuse uploads below this; default 1GiB
   timezone: UTC                              # for {date} templates & schedules; default UTC

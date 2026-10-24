@@ -17,7 +17,7 @@ server:
   banner: "Authorized use only. All access is logged."
   idle_timeout: 15m
   # All accounts together.
-  max_connections: 1000
+  max_connections: 25
   spool_dir: /var/lib/sftpgate/spool
   # Used for {date} and {time} in copy keys.
   timezone: Asia/Kolkata

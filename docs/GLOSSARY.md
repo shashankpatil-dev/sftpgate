@@ -236,7 +236,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **`max_connections`**
 : The most connections open at once, counting all accounts together. Protects
-  the server from a flood. Default 1000.
+  the server from a flood. Default 25: SFTP work is batch work, a few partners at a time.
 
 **`max_sessions`**
 : The most connections open at once for one account. 0 means no limit.
@@ -383,9 +383,15 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Checksum / SHA-256 / MD5**
 : A fingerprint of a file's contents. If even one byte changes, the
-  fingerprint changes. SFTPgate stores the SHA-256 with every upload, and the
-  bucket checks the MD5 when saving, so a file damaged on the way is never
-  stored.
+  fingerprint changes. SFTPgate stores the SHA-256 with every upload and,
+  after saving, reads the size and checksum back from the bucket before
+  telling the partner it worked. GCS and Azure also check an MD5 while saving;
+  S3 checks each request with its own checksums.
+
+**Read-back check**
+: After saving a file, SFTPgate asks the bucket for the stored size and
+  checksum and compares them with what it sent. Some S3-compatible stores
+  answer "saved" even when they kept nothing; this catches it.
 
 **Integrity**
 : Being sure a file is exactly what was sent, with no missing or changed bytes.

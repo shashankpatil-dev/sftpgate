@@ -256,7 +256,7 @@ save, and that partner gets "file already exists".
 
 | Setting | Default | What it protects |
 |---|---|---|
-| `server.max_connections` | 1000 | the server, from a flood of connections from all accounts together |
+| `server.max_connections` | 25 | the server, from a flood of connections from all accounts together. SFTP work is batch work: a few partners at a time. Raise it for busy servers. |
 | `accounts[].max_sessions` | no limit | one account from using up the server |
 | `folders[].max_file_size` | no limit | the disk, from one huge file; an upload only starts if this much space is free |
 | `server.min_spool_free` | 1GiB | free disk left over for everything else |
