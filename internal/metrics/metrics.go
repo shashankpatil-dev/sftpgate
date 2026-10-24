@@ -43,9 +43,11 @@ var (
 	}, []string{"account", "folder", "direction"})
 
 	TransferDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "sftpgate_transfer_duration_seconds",
-		Help:    "How long uploads and downloads take.",
-		Buckets: prometheus.ExponentialBuckets(0.05, 4, 8),
+		Name: "sftpgate_transfer_duration_seconds",
+		Help: "How long uploads and downloads take.",
+		// 10ms up to about 4 minutes, in steps of 2.5x, so both small and
+		// large files land in a useful bucket and p95 can be estimated.
+		Buckets: prometheus.ExponentialBuckets(0.01, 2.5, 12),
 	}, []string{"direction"})
 
 	StorageErrors = promauto.NewCounterVec(prometheus.CounterOpts{
