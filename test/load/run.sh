@@ -60,6 +60,8 @@ setup() {
   log "starting the S3 storage, Prometheus, Grafana and Jaeger"
   k create configmap grafana-dashboard --from-file=sftpgate.json=deploy/helm/sftpgate/files/dashboard.json \
     --dry-run=client -o yaml | k apply -f - >/dev/null
+  k create configmap prometheus --from-file=prometheus.yml=test/load/k8s/prometheus.yml \
+    --from-file=alerts.yml=deploy/helm/sftpgate/files/alerts.yml --dry-run=client -o yaml | k apply -f - >/dev/null
   k apply -f test/load/k8s/s3.yaml -f test/load/k8s/prometheus.yaml -f test/load/k8s/observability.yaml >/dev/null
   k rollout status deploy/grafana --timeout=180s >/dev/null
   k rollout status deploy/jaeger --timeout=180s >/dev/null
@@ -91,10 +93,22 @@ make_bucket() {
   k delete pod make-bucket --wait=false >/dev/null
 }
 
-# deploy sets the replica count (and optionally a changed values file) and
-# waits until every pod is ready.
+# reset_storage wipes the S3 storage (its data is in the pod's scratch
+# space) and makes the bucket again, so every scenario starts empty and
+# deleted files from earlier scenarios can't fill it up.
+reset_storage() {
+  k scale deploy/s3 --replicas=0 >/dev/null
+  k wait --for=delete pod -l app=s3 --timeout=120s >/dev/null 2>&1 || true
+  k scale deploy/s3 --replicas=1 >/dev/null
+  k rollout status deploy/s3 --timeout=180s >/dev/null
+  make_bucket
+}
+
+# deploy wipes the storage, sets the replica count (and optionally a changed
+# values file) and waits until every pod is ready.
 deploy() {
   local replicas=$1 values=${2:-test/load/values.yaml}
+  reset_storage
   helm upgrade sftpgate deploy/helm/sftpgate -n "$NS" -f "$values" --set replicas="$replicas" --wait --timeout 300s >/dev/null
   k rollout status statefulset/sftpgate --timeout=300s >/dev/null
   # Let Prometheus find the pods before the scenario starts.

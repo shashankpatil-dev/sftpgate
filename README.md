@@ -22,6 +22,7 @@ S3-compatible store), and every access is logged.
 | [docs/ONBOARDING.md](docs/ONBOARDING.md) | set it up with Docker or Helm, add partners, and look up every config setting |
 | [docs/WHAT-YOU-GET.md](docs/WHAT-YOU-GET.md) | see what it gives partners, your teams, security and operations |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | understand a term (spool, queue, prefix, host key, ...) in plain words |
+| [docs/LOAD-TEST.md](docs/LOAD-TEST.md) | see how it performs under load and failures, and how to size it |
 | [docs/PRD.md](docs/PRD.md), [HLD](docs/HLD.md), [LLD](docs/LLD.md) | read the design |
 
 ## Quick start (local)

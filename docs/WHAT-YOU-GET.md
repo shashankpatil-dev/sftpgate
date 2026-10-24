@@ -89,7 +89,9 @@ restarts, and are visible in the UI and alerts if they give up.
 
 ### Being told when something is wrong
 
-11 ready-made alert rules:
+11 ready-made alert rules. Prometheus shows them as firing; to send Slack,
+email or PagerDuty messages, connect it to Alertmanager (on Kubernetes your
+Prometheus Operator usually has one already).
 
 | Alert | Tells you |
 |---|---|

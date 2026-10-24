@@ -1,21 +1,5 @@
-# Prometheus for the load test. It finds every SFTPgate pod through the
-# headless service and scrapes each one every 5 seconds.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 5s
-    scrape_configs:
-      - job_name: sftpgate
-        dns_sd_configs:
-          - names: [sftpgate-pods.sftpgate-load.svc.cluster.local]
-            type: A
-            port: 8080
-            refresh_interval: 5s
----
+# Prometheus for the load test. run.sh creates its "prometheus" ConfigMap
+# from prometheus.yml and the chart's alerts.yml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
