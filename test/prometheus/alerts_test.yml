@@ -150,3 +150,18 @@ tests:
           - exp_labels: { severity: critical }
             exp_annotations:
               summary: Files were saved but their post-upload actions could not be queued (spool disk full or not writable).
+
+  - name: a failing scheduled transfer is named
+    interval: 1m
+    input_series:
+      - series: 'sftpgate_transfer_runs_total{transfer="bank-statements", result="failed"}'
+        values: "0 0 1 1"
+      - series: 'sftpgate_transfer_runs_total{transfer="gst-returns", result="failed"}'
+        values: "0 0 0 0"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SftpgateTransferFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, transfer: bank-statements }
+            exp_annotations:
+              summary: "Scheduled transfer bank-statements failed in the last hour. Check the transfer events."

@@ -1021,6 +1021,9 @@ type Current struct {          // the "current file" flowing through steps
 
 ## 11. Read-only API and UI [v0.3]
 
+> **As built in v0.3.** Routes exist only while `http.tokens` is set (otherwise 404). Tokens are secret references of at least 16 characters, compared in constant time on their SHA-256. HTML pages send a strict CSP (`default-src 'none'; style-src 'self'`) and no JS. API answers are `no-store`. The overview page also lists recent failed and denied events. `revision` comes from `SFTPGATE_REVISION`, or from the git-sync worktree folder name in the config's real path.
+
+
 | Endpoint | Returns |
 |---|---|
 | `GET /api/v1/status` | version, uptime, config hash, revision, loaded_at, readiness per storage |
@@ -1036,6 +1039,9 @@ type Current struct {          // the "current file" flowing through steps
 ---
 
 ## 12. Scheduled jobs [v0.3]
+
+> **As built in v0.3.** The config uses top-level `remotes:` (name to addr, user, pinned `host_key`, `private_key` and/or `password`) and `transfers:` (each with `pull` or `push`). It does not use `jobs.list`. The name "jobs" was already taken by post-upload actions, and remotes are shared by several transfers. A YAML `enabled` flag can't differ between replicas that share one ConfigMap, so the scheduler is switched off per replica with `SFTPGATE_TRANSFERS=off`. Outgoing connections use the same no-SHA-1 algorithm lists as the server (`internal/sshalgo`). Push temp files are `.<name>` (dot-prefixed, same ending), so the partner's filename patterns still accept them. Each run closes both the SFTP client and the SSH connection under it: closing only the client leaks connections, a bug a test caught. The scheduler rebuilds its cron table whenever the config hash changes.
+
 
 Pull job:
 

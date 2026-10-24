@@ -21,7 +21,10 @@ accounts:
   - name: demo
     description: Local test account (password is "demo")
     auth:
-      public_keys: ["${file:/etc/sftpgate/keys/demo_user.pub}"]
+      public_keys:
+        - "${file:/etc/sftpgate/keys/demo_user.pub}"
+        # Used by the demo-pull transfer below.
+        - "${file:/etc/sftpgate/keys/transfer_key.pub}"
       password_hash: "${env:DEMO_PW_HASH}"
     folders:
       - path: /s3
@@ -35,3 +38,20 @@ accounts:
         storage: gcs
         prefix: demo/
         perms: [list, download, upload, overwrite, delete, rename, mkdir]
+
+# A scheduled transfer that pulls from this same server, to show how it works:
+# every 5 seconds, *.pull files in the demo account's /s3 folder move to /gcs/pulled.
+remotes:
+  self:
+    addr: localhost:2222
+    user: demo
+    host_key: "${file:/etc/sftpgate/keys/ssh_host_ed25519_key.pub}"
+    private_key: "${file:/etc/sftpgate/keys/transfer_key}"
+
+transfers:
+  - name: demo-pull
+    schedule: "@every 5s"
+    pull:
+      from: { remote: self, path: /s3, pattern: "*.pull" }
+      to: { storage: gcs, key: "demo/pulled/{filename}" }
+      delete_after: true

@@ -57,6 +57,27 @@ done
 [ -n "$copied" ] || fail "the on_upload copy never appeared in /gcs/copies"
 cmp -s "$work/upload.bin" "$work/copied.bin" || fail "the copied file differs from the uploaded file"
 
+echo "checking the scheduled pull transfer..."
+echo "pulled by a transfer" > "$work/statement.pull"
+echo "put $work/statement.pull /s3/statement.pull" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null
+pulled=""
+for _ in $(seq 1 20); do
+  if echo "get /gcs/pulled/statement.pull $work/pulled.txt" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null 2>&1; then
+    pulled=yes
+    break
+  fi
+  sleep 1
+done
+[ -n "$pulled" ] || fail "the transfer never pulled statement.pull into /gcs/pulled"
+cmp -s "$work/statement.pull" "$work/pulled.txt" || fail "the pulled file differs"
+for _ in $(seq 1 5); do
+  echo "ls /s3/statement.pull" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null 2>&1 || break
+  sleep 1
+done
+if echo "ls /s3/statement.pull" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null 2>&1; then
+  fail "delete_after did not remove the pulled file from /s3"
+fi
+
 echo "checking that shell access is refused..."
 if ssh -q -i "$KEY" -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes "demo@$HOST" true 2>/dev/null; then
   fail "a shell command was allowed"

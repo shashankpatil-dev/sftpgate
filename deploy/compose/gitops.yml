@@ -1,0 +1,37 @@
+# GitOps: keep SFTPgate's config in sync with a git repository.
+#
+# git-sync pulls the repository every 30 seconds into a shared volume.
+# SFTPgate reads its config from there and reloads when the file changes.
+# A commit with a broken config is rejected and the old config keeps running.
+#
+#   GITOPS_REPO=https://github.com/acme/sftpgate-config.git \
+#   GITOPS_PATH=prod/sftpgate.yaml \
+#   docker compose -f docker-compose.yml -f gitops.yml up -d
+#
+# For a private repository, see git-sync's GITSYNC_SSH_* or
+# GITSYNC_USERNAME / GITSYNC_PASSWORD_FILE settings.
+
+services:
+  git-sync:
+    image: registry.k8s.io/git-sync/git-sync:v4.4.2
+    environment:
+      GITSYNC_REPO: ${GITOPS_REPO:?set GITOPS_REPO to the config repository URL}
+      GITSYNC_REF: ${GITOPS_REF:-main}
+      GITSYNC_ROOT: /git
+      GITSYNC_LINK: current
+      GITSYNC_PERIOD: ${GITOPS_PERIOD:-30s}
+    volumes:
+      - gitops:/git
+    restart: unless-stopped
+
+  sftpgate:
+    environment:
+      # "current" is a link git-sync swaps to each new commit in one step.
+      SFTPGATE_CONFIG: /git/current/${GITOPS_PATH:-sftpgate.yaml}
+    volumes:
+      - gitops:/git:ro
+    depends_on:
+      - git-sync
+
+volumes:
+  gitops:

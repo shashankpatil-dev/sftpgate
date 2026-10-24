@@ -3,7 +3,7 @@ LINT    := $(shell go env GOPATH)/bin/golangci-lint
 
 PROMETHEUS_IMAGE := prom/prometheus:v3.6.0
 
-.PHONY: build test lint validate check-monitoring dev-keys up down logs e2e
+.PHONY: build test lint validate check-monitoring dev-keys up up-gitops down logs e2e
 
 ## build: compile the sftpgate binary into ./bin
 build:
@@ -34,13 +34,19 @@ dev-keys:
 	mkdir -p .dev/keys
 	test -f .dev/keys/ssh_host_ed25519_key || ssh-keygen -q -t ed25519 -N "" -f .dev/keys/ssh_host_ed25519_key
 	test -f .dev/keys/demo_user || ssh-keygen -q -t ed25519 -N "" -f .dev/keys/demo_user
-	# Dev only: the container runs as a different user and must read the host key.
-	chmod 644 .dev/keys/ssh_host_ed25519_key
+	test -f .dev/keys/transfer_key || ssh-keygen -q -t ed25519 -N "" -f .dev/keys/transfer_key
+	chmod 600 .dev/keys/demo_user
+	# Dev only: the container runs as a different user and must read these keys.
+	chmod 644 .dev/keys/ssh_host_ed25519_key .dev/keys/transfer_key
 
 ## up: start SFTPgate with the S3 mock and the GCS emulator
 up: dev-keys
 	$(COMPOSE) up -d --build
 	
+
+## up-gitops: like up, but the config comes from a git repository (set GITOPS_REPO, and GITOPS_PATH if needed)
+up-gitops: dev-keys
+	$(COMPOSE) -f deploy/compose/gitops.yml up -d --build
 
 ## down: stop the local setup and delete its data
 down:

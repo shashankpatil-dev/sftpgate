@@ -875,6 +875,104 @@
     },
     {
       "id": 17,
+      "type": "timeseries",
+      "title": "Scheduled transfer runs",
+      "description": "A failed run means at least one file failed, or the remote could not be reached.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (transfer, result) (increase(sftpgate_transfer_runs_total[15m]))",
+          "legendFormat": "{{transfer}} {{result}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Files moved by transfers",
+      "description": "skipped: the file was already there, so it was not moved again.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (transfer, result) (increase(sftpgate_transfer_files_total[15m]))",
+          "legendFormat": "{{transfer}} {{result}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
       "type": "table",
       "title": "Running config",
       "datasource": {
@@ -886,7 +984,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 52
       },
       "targets": [
         {

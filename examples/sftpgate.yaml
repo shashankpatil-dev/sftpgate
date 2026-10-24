@@ -89,3 +89,29 @@ accounts:
         storage: reports
         prefix: gst/
         perms: [list, download]
+
+# Other SFTP servers that scheduled transfers connect to. The host key is
+# pinned: SFTPgate refuses to connect if the server presents another one.
+remotes:
+  bank:
+    addr: sftp.bank.example:22
+    user: acme
+    host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+    private_key: "${file:/etc/sftpgate/secrets/bank_id_ed25519}"
+
+# Scheduled transfers. Times use server.timezone.
+transfers:
+  # Every morning, fetch new bank statements into our bucket.
+  - name: bank-statements
+    schedule: "0 6 * * *"
+    pull:
+      from: { remote: bank, path: /out, pattern: "*.csv" }
+      to: { storage: recon-raw, key: "bank/{date}/{filename}" }
+
+  # Every 30 minutes, send prepared payout files and move them to sent/.
+  - name: bank-payouts
+    schedule: "*/30 * * * *"
+    push:
+      from: { storage: reports, prefix: payouts/outbox/, pattern: "*.csv" }
+      to: { remote: bank, path: /in }
+      after: "move:payouts/sent/"

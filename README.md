@@ -70,6 +70,58 @@ After `max_attempts` it moves to `queue/failed`. To run it again, move its file
 back into `queue`. A job can run more than once, so webhook receivers should
 ignore a `job_id` they have already seen.
 
+## Scheduled transfers
+
+SFTPgate can also be the client: pull new files from a partner's SFTP server
+into a bucket, or push files from a bucket to the partner, on a schedule.
+
+```yaml
+remotes:
+  bank:
+    addr: sftp.bank.example:22
+    user: acme
+    host_key: "ssh-ed25519 AAAA..."               # pinned: required
+    private_key: "${file:/secrets/bank_key}"      # and/or password: "${env:...}"
+
+transfers:
+  - name: bank-statements
+    schedule: "0 6 * * *"                         # cron, in server.timezone
+    pull:
+      from: { remote: bank, path: /out, pattern: "*.csv" }
+      to: { storage: recon-raw, key: "bank/{date}/{filename}" }
+      delete_after: false
+  - name: bank-payouts
+    schedule: "*/30 * * * *"
+    push:
+      from: { storage: reports, prefix: payouts/outbox/, pattern: "*.csv" }
+      to: { remote: bank, path: /in }
+      after: "move:payouts/sent/"                 # keep | delete | move:<prefix>
+```
+
+- **Pull** skips files already in the bucket. With `delete_after`, the remote
+  file is removed once it is stored.
+- **Push** uploads under a temporary dot-name and renames it when complete, so
+  the partner never sees half a file. With `after: keep` it skips files the
+  remote already has.
+- A run is skipped if the previous one is still going. One bad file doesn't
+  stop the others, but the run is marked failed.
+- With several replicas, set `SFTPGATE_TRANSFERS=off` on all but one.
+
+## GitOps with git-sync
+
+Keep the config in a git repository and let
+[git-sync](https://github.com/kubernetes/git-sync) deliver it:
+
+```sh
+GITOPS_REPO=https://github.com/acme/sftpgate-config.git GITOPS_PATH=prod/sftpgate.yaml make up-gitops
+```
+
+A merged commit goes live within about 30 seconds. A commit with a broken
+config is rejected and the old config keeps running. The web UI, the API and
+the `sftpgate_config_info` metric show the git commit that is live. See
+[`deploy/compose/gitops.yml`](deploy/compose/gitops.yml). On Kubernetes, run
+git-sync as a sidecar sharing an `emptyDir` with SFTPgate in the same way.
+
 ## Web UI and API
 
 A read-only web page and JSON API show open sessions, recent events, the

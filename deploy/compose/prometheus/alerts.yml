@@ -76,3 +76,10 @@ groups:
           severity: critical
         annotations:
           summary: Files were saved but their post-upload actions could not be queued (spool disk full or not writable).
+
+      - alert: SftpgateTransferFailing
+        expr: sum by (transfer) (increase(sftpgate_transfer_runs_total{result="failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduled transfer {{ $labels.transfer }} failed in the last hour. Check the transfer events."
