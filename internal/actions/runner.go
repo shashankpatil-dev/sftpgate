@@ -210,6 +210,32 @@ func (r *Runner) dueJobs() []Job {
 	return due
 }
 
+// List returns the jobs waiting in the queue and the jobs that gave up,
+// oldest first, for the web UI.
+func (r *Runner) List() (pending, failed []Job, err error) {
+	if pending, err = loadAll(filepath.Join(r.Dir, "*.json")); err != nil {
+		return nil, nil, err
+	}
+	failed, err = loadAll(filepath.Join(r.Dir, "failed", "*.json"))
+	return pending, failed, err
+}
+
+// loadAll reads every job file matching pattern. Job ids start with the
+// time, so the sorted file names are already oldest first.
+func loadAll(pattern string) ([]Job, error) {
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	jobs := make([]Job, 0, len(files))
+	for _, f := range files {
+		if job, err := load(f); err == nil {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs, nil
+}
+
 // claim marks a job as running, so it is never handed out twice.
 func (r *Runner) claim(id string) bool {
 	r.mu.Lock()

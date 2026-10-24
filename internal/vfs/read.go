@@ -115,6 +115,7 @@ func (d *download) Close() error {
 
 	folder := d.t.folder.Path
 	metrics.TransferBytes.WithLabelValues(d.h.Account.Name, folder, "out").Add(float64(d.sent))
+	d.h.BytesOut.Add(d.sent)
 	metrics.TransferDuration.WithLabelValues("out").Observe(time.Since(d.start).Seconds())
 
 	// Storage errors were already logged in ReadAt, so only record the result.

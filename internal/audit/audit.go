@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"sync/atomic"
+	"time"
 )
 
 // Results an event can have.
@@ -20,26 +21,27 @@ const (
 
 // Event is one audit record. Empty fields are left out of the output.
 type Event struct {
-	Event      string
-	Result     string
-	Error      string
-	Session    string
-	Account    string
-	IP         string
-	Method     string
-	KeyFP      string
-	User       string
-	Path       string
-	Storage    string
-	Key        string
-	ToPath     string
-	ToKey      string
-	SHA256     string
-	Config     string
-	Job        string
-	TraceID    string
-	Size       int64
-	DurationMS int64
+	Time       time.Time `json:"time"`
+	Event      string    `json:"event"`
+	Result     string    `json:"result"`
+	Error      string    `json:"error,omitempty"`
+	Session    string    `json:"session,omitempty"`
+	Account    string    `json:"account,omitempty"`
+	IP         string    `json:"ip,omitempty"`
+	Method     string    `json:"method,omitempty"`
+	KeyFP      string    `json:"key_fp,omitempty"`
+	User       string    `json:"user,omitempty"`
+	Path       string    `json:"path,omitempty"`
+	Storage    string    `json:"storage,omitempty"`
+	Key        string    `json:"key,omitempty"`
+	ToPath     string    `json:"to_path,omitempty"`
+	ToKey      string    `json:"to_key,omitempty"`
+	SHA256     string    `json:"sha256,omitempty"`
+	Config     string    `json:"config,omitempty"`
+	Job        string    `json:"job,omitempty"`
+	TraceID    string    `json:"trace_id,omitempty"`
+	Size       int64     `json:"size,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
 }
 
 var logger atomic.Pointer[slog.Logger]
@@ -53,8 +55,13 @@ func SetOutput(w io.Writer) {
 	logger.Store(slog.New(slog.NewJSONHandler(w, nil)))
 }
 
-// Emit writes one event.
+// Emit writes one event to the log and keeps it in the recent-events list.
 func Emit(e Event) {
+	if e.Time.IsZero() {
+		e.Time = time.Now()
+	}
+	recent.add(e)
+
 	var attrs []slog.Attr
 	add := func(k, v string) {
 		if v != "" {

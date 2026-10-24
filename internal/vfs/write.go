@@ -158,6 +158,7 @@ func (u *upload) Close() error {
 
 	folder := u.t.folder.Path
 	metrics.TransferBytes.WithLabelValues(u.h.Account.Name, folder, "in").Add(float64(u.size))
+	u.h.BytesIn.Add(u.size)
 	metrics.TransferDuration.WithLabelValues("in").Observe(time.Since(u.start).Seconds())
 	u.h.record(e, u.t, nil)
 	u.afterUpload(sha)

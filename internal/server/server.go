@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +57,12 @@ type session struct {
 	id      string
 	account *config.Account
 	conn    *ssh.ServerConn
+	ip      string
+	method  string
+	started time.Time
+
+	// files is set once the session starts serving SFTP.
+	files *vfs.Handler
 }
 
 // New returns a server that reads its config from cfg.
@@ -168,9 +175,12 @@ func (s *Server) handle(c net.Conn) {
 		id:      newSessionID(),
 		account: cfg.Account(sshConn.Permissions.Extensions[extAccount]),
 		conn:    sshConn,
+		ip:      ip.String(),
+		method:  sshConn.Permissions.Extensions[extMethod],
+		started: time.Now(),
 	}
 	ev.Session, ev.Account = sess.id, sess.account.Name
-	ev.Method = sshConn.Permissions.Extensions[extMethod]
+	ev.Method = sess.method
 	ev.KeyFP = sshConn.Permissions.Extensions[extKeyFP]
 	metrics.Auth.WithLabelValues(sess.account.Name, ev.Method, audit.OK).Inc()
 
@@ -192,22 +202,65 @@ func (s *Server) handle(c net.Conn) {
 
 	ev.Event, ev.Result = "session_start", audit.OK
 	audit.Emit(ev)
-	start := time.Now()
 
 	go ssh.DiscardRequests(reqs)
-	s.serveChannels(chans, &vfs.Handler{
+	s.serveChannels(chans, sess.handler(ctx, cfg, s))
+
+	ev.Event, ev.Method, ev.KeyFP = "session_end", "", ""
+	ev.DurationMS = time.Since(sess.started).Milliseconds()
+	audit.Emit(ev)
+}
+
+// handler builds the file handler for this session. It is kept on the
+// session so the web UI can read its byte counters.
+func (sess *session) handler(ctx context.Context, cfg *config.Config, s *Server) *vfs.Handler {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess.files = &vfs.Handler{
 		Config:      cfg,
 		Account:     sess.account,
 		Buckets:     s.Buckets,
 		SessionID:   sess.id,
-		IP:          ip.String(),
+		IP:          sess.ip,
 		AfterUpload: s.AfterUpload,
 		Ctx:         ctx,
-	})
+	}
+	return sess.files
+}
 
-	ev.Event, ev.Method, ev.KeyFP = "session_end", "", ""
-	ev.DurationMS = time.Since(start).Milliseconds()
-	audit.Emit(ev)
+// SessionInfo describes one open session, for the web UI.
+type SessionInfo struct {
+	ID       string    `json:"id"`
+	Account  string    `json:"account"`
+	IP       string    `json:"ip"`
+	Method   string    `json:"method"`
+	Started  time.Time `json:"started"`
+	BytesIn  int64     `json:"bytes_in"`
+	BytesOut int64     `json:"bytes_out"`
+}
+
+// Sessions lists the open sessions, oldest first.
+func (s *Server) Sessions() []SessionInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]SessionInfo, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		info := SessionInfo{
+			ID:      sess.id,
+			Account: sess.account.Name,
+			IP:      sess.ip,
+			Method:  sess.method,
+			Started: sess.started,
+		}
+		if sess.files != nil {
+			info.BytesIn = sess.files.BytesIn.Load()
+			info.BytesOut = sess.files.BytesOut.Load()
+		}
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })
+	return out
 }
 
 // serveChannels answers channel requests until the connection closes.

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -45,6 +46,10 @@ type Handler struct {
 	// Ctx carries the session's trace span. File operations become child
 	// spans of it. It may be nil when tracing isn't used.
 	Ctx context.Context
+
+	// BytesIn and BytesOut count the bytes of finished uploads and downloads.
+	BytesIn  atomic.Int64
+	BytesOut atomic.Int64
 }
 
 // Uploaded describes a file that was just saved to a bucket.
