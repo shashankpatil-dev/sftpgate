@@ -1,0 +1,50 @@
+# The S3 storage for the load test: SeaweedFS, a production-grade
+# S3-compatible store, as one container with fixed CPU and memory, so the
+# results don't depend on how busy the laptop is.
+#
+# (adobe/s3mock was tried first, but it corrupts its own metadata under
+# concurrent uploads, reads and deletes, and then answers every request
+# with HTTP 500.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: s3 }
+  template:
+    metadata:
+      labels: { app: s3 }
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:3.97
+          # Small volumes, few of them, and early clean-up of deleted data:
+          # a load test deletes every file it checks, and SeaweedFS otherwise
+          # keeps the space until it compacts.
+          args: [server, -dir=/data, -s3, -s3.port=8333, -master.volumeSizeLimitMB=256, -volume.max=16, -master.garbageThreshold=0.01]
+          ports:
+            - { name: s3, containerPort: 8333 }
+          resources:
+            requests: { cpu: "2", memory: 1Gi }
+            limits: { cpu: "2", memory: 2Gi }
+          readinessProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 2
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir:
+            # Never let the test storage fill the laptop's disk.
+            sizeLimit: 8Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3
+spec:
+  selector: { app: s3 }
+  ports:
+    - { name: s3, port: 8333, targetPort: s3 }

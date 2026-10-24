@@ -2,3 +2,4 @@
 /bin/
 /.dev/
 *.out
+test/load/results/

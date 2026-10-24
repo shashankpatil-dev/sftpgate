@@ -1,0 +1,57 @@
+# Helm values for the load test (test/load/run.sh).
+image:
+  repository: sftpgate
+  tag: test
+  pullPolicy: Never
+
+service:
+  sftp:
+    type: ClusterIP
+
+# Each SFTPgate pod gets at most one CPU and 512Mi, like a small real setup.
+resources:
+  requests: { cpu: 500m, memory: 256Mi }
+  limits: { cpu: "1", memory: 512Mi }
+
+persistence:
+  # 5 uploads x 600 MiB reserved at once, plus room.
+  size: 5Gi
+
+secretEnv: [load-env]
+
+# Traces go to Jaeger. One session in ten is traced: tracing every session
+# would slow down the server being measured.
+env:
+  - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4318" }
+  - { name: OTEL_TRACES_SAMPLER, value: parentbased_traceidratio }
+  - { name: OTEL_TRACES_SAMPLER_ARG, value: "0.1" }
+secretFiles:
+  - secretName: load-user-key
+    mountPath: /etc/sftpgate/load
+
+config: |
+  version: 1
+  server:
+    host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
+    max_connections: 25
+    reload_interval: 2s
+  storages:
+    s3: "s3://load?endpoint=http://s3:8333&use_path_style=true&region=us-east-1"
+  accounts:
+    - name: loadtest
+      auth:
+        public_keys: ["${file:/etc/sftpgate/load/user.pub}"]
+      # Two folders, like two kinds of partner. Each upload reserves its
+      # folder's max_file_size on the spool disk, so the limit should be
+      # close to the real file sizes.
+      folders:
+        - path: /small
+          storage: s3
+          prefix: load/small/
+          perms: [list, upload, download, delete]
+          max_file_size: 2MiB
+        - path: /large
+          storage: s3
+          prefix: load/large/
+          perms: [list, upload, download, delete]
+          max_file_size: 600MiB

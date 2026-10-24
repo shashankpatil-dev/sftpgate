@@ -1,0 +1,53 @@
+# Prometheus for the load test. It finds every SFTPgate pod through the
+# headless service and scrapes each one every 5 seconds.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+    scrape_configs:
+      - job_name: sftpgate
+        dns_sd_configs:
+          - names: [sftpgate-pods.sftpgate-load.svc.cluster.local]
+            type: A
+            port: 8080
+            refresh_interval: 5s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: prometheus }
+  template:
+    metadata:
+      labels: { app: prometheus }
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.6.0
+          args: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.retention.time=1d]
+          ports:
+            - { name: http, containerPort: 9090 }
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus }
+      volumes:
+        - name: config
+          configMap: { name: prometheus }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector: { app: prometheus }
+  ports:
+    - { name: http, port: 9090, targetPort: http }
