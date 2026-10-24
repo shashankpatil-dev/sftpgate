@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +77,11 @@ func newEnvWith(t *testing.T, edit func(string) string) *env {
 	audit.SetOutput(io.Discard)
 
 	src := strings.Replace(testConfig, "SPOOL", t.TempDir(), 1)
+	// VFS_TEST_STORAGE runs these tests against a real store, like a local
+	// S3-compatible server, instead of memory.
+	if url := os.Getenv("VFS_TEST_STORAGE"); url != "" {
+		src = strings.Replace(src, "raw: mem://", "raw: \""+url+"\"", 1)
+	}
 	if edit != nil {
 		src = edit(src)
 	}
@@ -423,4 +429,82 @@ func TestUploadsReserveSpoolSpace(t *testing.T) {
 		t.Fatalf("upload after the first finished must start: %v", err)
 	}
 	_ = third.Close()
+}
+
+// Clients like WinSCP and pkg/sftp read big files with many requests in
+// flight at once, so the server gets them out of order. Every byte must
+// still come back in the right place.
+func TestParallelReadsOfALargeFile(t *testing.T) {
+	e := newEnv(t)
+	data := make([]byte, 20<<20)
+	for i := range data {
+		data[i] = byte(i * 7 % 251)
+	}
+	if err := e.bucket.WriteAll(context.Background(), "acme/out/big.bin", data, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256(data)
+
+	for range 3 {
+		f, err := e.client.Open("/outbound/big.bin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := sha256.New()
+		// WriteTo keeps many read requests in flight, like real clients do.
+		if _, err := f.WriteTo(h); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		if got := h.Sum(nil); !bytes.Equal(got, want[:]) {
+			t.Fatal("downloaded data differs from the stored file")
+		}
+	}
+}
+
+// Several partners downloading different large files at the same time must
+// each get exactly their own file.
+func TestConcurrentLargeDownloads(t *testing.T) {
+	e := newEnv(t)
+	const n = 5
+	want := make([][32]byte, n)
+	for i := range n {
+		data := make([]byte, 8<<20)
+		for j := range data {
+			data[j] = byte((j*(i+3) + i) % 251)
+		}
+		want[i] = sha256.Sum256(data)
+		if err := e.bucket.WriteAll(context.Background(), fmt.Sprintf("acme/out/many-%d.bin", i), data, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := range n {
+		client, _, _ := e.connect(t)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f, err := client.Open(fmt.Sprintf("/outbound/many-%d.bin", i))
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer f.Close()
+			h := sha256.New()
+			if _, err := f.WriteTo(h); err != nil {
+				errs <- err
+				return
+			}
+			if !bytes.Equal(h.Sum(nil), want[i][:]) {
+				errs <- fmt.Errorf("file %d came back different", i)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 }
