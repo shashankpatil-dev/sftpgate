@@ -1,0 +1,9 @@
+# Loads the SFTPgate dashboard from /var/lib/grafana/dashboards.
+apiVersion: 1
+
+providers:
+  - name: sftpgate
+    folder: SFTPgate
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

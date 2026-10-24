@@ -1,10 +1,14 @@
-# Local test setup: SFTPgate with an S3 mock and a GCS emulator.
+# Local test setup: SFTPgate with an S3 mock, a GCS emulator, Prometheus
+# and Grafana.
 #
-#   make dev-keys   # once, creates test keys in .dev/keys
-#   make up         # start everything
+#   make up         # start everything (creates test keys the first time)
 #   make e2e        # run the end-to-end checks
+#   make down       # stop and delete all data
 #
-# Then: sftp -P 2222 -i .dev/keys/demo_user demo@localhost
+# Then:
+#   sftp -P 2222 -i .dev/keys/demo_user demo@localhost
+#   Grafana dashboard:  http://localhost:3000
+#   Prometheus:         http://localhost:9090 (Alerts tab shows the alert rules)
 
 name: sftpgate-dev
 
@@ -22,8 +26,12 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       # Sends gs:// traffic to the GCS emulator instead of Google.
       STORAGE_EMULATOR_HOST: fake-gcs:4443
+      SFTPGATE_CONFIG: /etc/sftpgate/config/sftpgate.yaml
     volumes:
-      - ./dev.yaml:/etc/sftpgate/sftpgate.yaml:ro
+      # Mount the folder, not the file. Editors and git replace files instead
+      # of changing them, and a single-file mount would keep the old one,
+      # so hot reload would silently stop working.
+      - ./config:/etc/sftpgate/config:ro
       - ../../.dev/keys:/etc/sftpgate/keys:ro
       - spool:/var/lib/sftpgate/spool
     read_only: true
@@ -45,6 +53,33 @@ services:
     volumes:
       # Each folder under gcs-data becomes a bucket.
       - ./gcs-data:/data:ro
+
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    depends_on:
+      - sftpgate
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      # Dev only: anyone can look at the dashboard without logging in.
+      # The admin login is admin / admin.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/sftpgate.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
 
 volumes:
   spool:

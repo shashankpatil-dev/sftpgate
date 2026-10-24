@@ -1,0 +1,115 @@
+# Unit tests for the alert rules. Run with: make check-monitoring
+#
+# Each test feeds made-up metric values over time and checks which alerts fire.
+
+rule_files:
+  - ../../deploy/compose/prometheus/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: down after one minute without a scrape
+    interval: 1m
+    input_series:
+      - series: 'up{job="sftpgate", instance="sftpgate:8080"}'
+        values: "1 0 0 0"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SftpgateDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: SftpgateDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: sftpgate, instance: "sftpgate:8080" }
+            exp_annotations:
+              summary: SFTPgate is not answering on /metrics.
+
+  - name: login failure spike, but not for a few failures
+    interval: 1m
+    input_series:
+      # 10 failures a minute: 50 in 5 minutes.
+      - series: 'sftpgate_auth_total{account="_unknown", method="any", result="failed"}'
+        values: "0+10x10"
+      # 1 failure a minute stays quiet.
+      - series: 'sftpgate_auth_total{account="_unknown", method="any", result="ok"}'
+        values: "0+1x10"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SftpgateLoginFailureSpike
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SftpgateLoginFailureSpike
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: More than 20 failed logins in 5 minutes. Someone may be guessing passwords.
+
+  - name: storage errors name the failing storage
+    interval: 1m
+    input_series:
+      - series: 'sftpgate_storage_errors_total{storage="recon-raw"}'
+        values: "0 0 3 3"
+      - series: 'sftpgate_storage_errors_total{storage="reports"}'
+        values: "0 0 0 0"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SftpgateStorageErrors
+        exp_alerts:
+          - exp_labels: { severity: critical, storage: recon-raw }
+            exp_annotations:
+              summary: Storage recon-raw is returning errors. Uploads or downloads may be failing.
+
+  - name: rejected config reload
+    interval: 1m
+    input_series:
+      - series: 'sftpgate_config_reload_total{result="error"}'
+        values: "0 0 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SftpgateConfigReloadFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, result: error }
+            exp_annotations:
+              summary: A new config was rejected. The old config is still running; check the logs and fix the file.
+
+  - name: spool disk low only after five minutes
+    interval: 1m
+    input_series:
+      # 1 GiB free, all the time.
+      - series: "sftpgate_spool_free_bytes"
+        values: "1073741824x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SftpgateSpoolDiskLow
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SftpgateSpoolDiskLow
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: Less than 2 GiB free on the upload spool disk. Large uploads will soon be refused.
+
+  - name: healthy server raises nothing
+    interval: 1m
+    input_series:
+      - series: 'up{job="sftpgate", instance="sftpgate:8080"}'
+        values: "1x10"
+      - series: 'sftpgate_config_info{hash="abc", revision=""}'
+        values: "1x10"
+      - series: "sftpgate_spool_free_bytes"
+        values: "107374182400x10"
+      - series: "sftpgate_throttled_ips"
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SftpgateDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SftpgateNotReady
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SftpgateSpoolDiskLow
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SftpgateIPsBlocked
+        exp_alerts: []

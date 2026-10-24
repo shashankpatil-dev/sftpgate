@@ -1,7 +1,9 @@
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 LINT    := $(shell go env GOPATH)/bin/golangci-lint
 
-.PHONY: build test lint validate dev-keys up down logs e2e
+PROMETHEUS_IMAGE := prom/prometheus:v3.6.0
+
+.PHONY: build test lint validate check-monitoring dev-keys up down logs e2e
 
 ## build: compile the sftpgate binary into ./bin
 build:
@@ -18,7 +20,14 @@ lint:
 ## validate: check the example configs the way CI checks a pull request
 validate: build
 	bin/sftpgate validate -offline examples/sftpgate.yaml
-	bin/sftpgate validate -offline deploy/compose/dev.yaml
+	bin/sftpgate validate -offline deploy/compose/config/sftpgate.yaml
+
+## check-monitoring: check the Prometheus config and run the alert rule tests
+check-monitoring:
+	docker run --rm -v "$(CURDIR)":/repo --entrypoint promtool $(PROMETHEUS_IMAGE) \
+		check config --syntax-only /repo/deploy/compose/prometheus/prometheus.yml
+	docker run --rm -v "$(CURDIR)":/repo -w /repo/test/prometheus --entrypoint promtool $(PROMETHEUS_IMAGE) \
+		test rules alerts_test.yml
 
 ## dev-keys: create a host key and a demo user key for local testing
 dev-keys:

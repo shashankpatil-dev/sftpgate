@@ -1,0 +1,57 @@
+# Alert rules for SFTPgate. Copy them into your own Prometheus and tune the
+# numbers to your traffic.
+
+groups:
+  - name: sftpgate
+    rules:
+      - alert: SftpgateDown
+        expr: up{job="sftpgate"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: SFTPgate is not answering on /metrics.
+
+      - alert: SftpgateNotReady
+        expr: absent(sftpgate_config_info) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: SFTPgate is running but has published no config.
+
+      - alert: SftpgateLoginFailureSpike
+        expr: sum(increase(sftpgate_auth_total{result="failed"}[5m])) > 20
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 20 failed logins in 5 minutes. Someone may be guessing passwords.
+
+      - alert: SftpgateIPsBlocked
+        expr: sftpgate_throttled_ips > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $value }} IP(s) are blocked after too many failed logins."
+
+      - alert: SftpgateStorageErrors
+        expr: sum by (storage) (increase(sftpgate_storage_errors_total[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storage {{ $labels.storage }} is returning errors. Uploads or downloads may be failing."
+
+      - alert: SftpgateConfigReloadFailed
+        expr: increase(sftpgate_config_reload_total{result="error"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A new config was rejected. The old config is still running; check the logs and fix the file.
+
+      - alert: SftpgateSpoolDiskLow
+        expr: sftpgate_spool_free_bytes < 2 * 1024 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Less than 2 GiB free on the upload spool disk. Large uploads will soon be refused.

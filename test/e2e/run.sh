@@ -6,6 +6,8 @@ set -euo pipefail
 HOST=${HOST:-localhost}
 PORT=${PORT:-2222}
 HTTP=${HTTP:-http://localhost:8080}
+PROMETHEUS=${PROMETHEUS:-http://localhost:9090}
+GRAFANA=${GRAFANA:-http://localhost:3000}
 KEY=${KEY:-.dev/keys/demo_user}
 
 work=$(mktemp -d)
@@ -49,5 +51,16 @@ fi
 echo "checking metrics..."
 curl -fs "$HTTP/metrics" | grep -q 'sftpgate_operations_total{account="demo",folder="/s3",op="upload",result="ok"}' \
   || fail "upload metric missing"
+
+echo "checking that Prometheus scrapes sftpgate..."
+for _ in $(seq 1 30); do
+  curl -fs "$PROMETHEUS/api/v1/targets" | grep -q '"health":"up"' && break
+  sleep 2
+done
+curl -fs "$PROMETHEUS/api/v1/targets" | grep -q '"health":"up"' || fail "Prometheus target is not up"
+curl -fs "$PROMETHEUS/api/v1/rules" | grep -q 'SftpgateStorageErrors' || fail "alert rules are not loaded"
+
+echo "checking the Grafana dashboard..."
+curl -fs "$GRAFANA/api/dashboards/uid/sftpgate" | grep -q '"title":"SFTPgate"' || fail "Grafana dashboard is missing"
 
 echo "all end-to-end checks passed"

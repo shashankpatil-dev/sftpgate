@@ -20,14 +20,39 @@ S3-compatible store), and every access is logged.
 You need Docker and the OpenSSH `sftp` client.
 
 ```sh
-make up       # starts SFTPgate with an S3 mock and a GCS emulator
+make up       # starts SFTPgate, an S3 mock, a GCS emulator, Prometheus and Grafana
 make e2e      # runs end-to-end checks
 
 sftp -P 2222 -i .dev/keys/demo_user demo@localhost
 ```
 
 The demo account sees two folders, `/s3` and `/gcs`, each backed by a different
-storage. Metrics are at <http://localhost:8080/metrics>. Run `make down` to stop.
+storage. Run `make down` to stop and delete everything.
+
+| What | Where |
+|---|---|
+| Grafana dashboard | <http://localhost:3000> (opens without login; admin login is `admin` / `admin`) |
+| Prometheus and alerts | <http://localhost:9090/alerts> |
+| Raw metrics | <http://localhost:8080/metrics> |
+
+The compose file is [`deploy/compose/docker-compose.yml`](deploy/compose/docker-compose.yml),
+and the config it runs is [`deploy/compose/config/sftpgate.yaml`](deploy/compose/config/sftpgate.yaml).
+Edit that file while it runs and SFTPgate reloads it within a few seconds.
+
+## Monitoring
+
+Ready-to-use files you can copy into your own setup:
+
+- [`deploy/compose/prometheus/alerts.yml`](deploy/compose/prometheus/alerts.yml):
+  alerts for the server being down, login failure spikes, blocked IPs, storage
+  errors, rejected config reloads and a low spool disk.
+- [`deploy/compose/grafana/dashboards/sftpgate.json`](deploy/compose/grafana/dashboards/sftpgate.json):
+  a dashboard with sessions, uploads, downloads, logins, traffic per account,
+  transfer times, storage errors, denied requests and the running config version.
+
+Mount the config **folder**, not the single file, in Docker and Kubernetes.
+Editors and git replace files instead of changing them, and a single-file mount
+keeps showing the old file, so hot reload would quietly stop working.
 
 ## Configuration
 
@@ -101,6 +126,7 @@ disconnected. An invalid file is rejected, and the old config keeps running.
 make test     # unit and integration tests
 make lint     # golangci-lint
 make validate # check the example configs
+make check-monitoring # check the Prometheus config and test the alert rules
 ```
 
 Tests live under `test/`. Design docs are in [`docs/`](docs): [PRD](docs/PRD.md),

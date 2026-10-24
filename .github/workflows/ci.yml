@@ -21,6 +21,8 @@ jobs:
         run: go test -race ./...
       - name: Check example configs
         run: make validate
+      - name: Check monitoring config and alert rules
+        run: make check-monitoring
 
   e2e:
     runs-on: ubuntu-latest
