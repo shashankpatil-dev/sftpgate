@@ -186,6 +186,18 @@ Mount the config **folder**, not the single file, in Docker and Kubernetes.
 Editors and git replace files instead of changing them, and a single-file mount
 keeps showing the old file, so hot reload would quietly stop working.
 
+## Tested clients
+
+| Client | Used by | Key | Password | Key **and** password |
+|---|---|---|---|---|
+| OpenSSH `sftp` | Linux and macOS scripts | ✅ | ✅ | ✅ |
+| PuTTY `psftp` 0.78 | the engine inside **WinSCP** and **FileZilla** | ✅ ed25519, RSA | ✅ | ✅ |
+| Paramiko 3.5 | Python scripts, Airflow | ✅ ed25519, RSA | ✅ | ❌ (Paramiko limitation; use a key) |
+| Go `x/crypto/ssh` + `pkg/sftp` | Go services | ✅ | ✅ | ✅ |
+| Software that only speaks SHA-1 (for example JSch 0.1.55) | very old Java systems | refused on purpose; the partner must upgrade | | |
+
+Each test uploads, lists, downloads and compares checksums.
+
 ## Deploying
 
 ### Docker

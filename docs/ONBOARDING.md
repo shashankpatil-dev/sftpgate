@@ -559,6 +559,11 @@ A list. Each item is one login.
 `mode: all` needs both `public_keys` and `password_hash`. `mode: any` needs at
 least one of them.
 
+**Client support for `mode: all` (key and password):** OpenSSH, PuTTY (and so
+WinSCP and FileZilla) and Go clients work. **Paramiko (Python) can't do the
+two-step login** against SFTPgate: it repeats a protocol message that Go's SSH
+library rejects. Give Paramiko partners `mode: any` with a key instead.
+
 ### 8.6 `accounts[].folders`
 
 | Setting | Default | What it does |
