@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -56,19 +57,17 @@ func (h *Handler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 		return nil, h.finish(e, t, sftp.ErrSSHFxPermissionDenied)
 	}
 
-	spoolDir := h.Config.Server.SpoolDir
-	if free, err := FreeSpace(spoolDir); err == nil {
-		if free < int64(h.Config.Server.MinSpoolFree) {
-			return nil, h.finish(e, t, errSpoolFull)
-		}
+	u := &upload{h: h, t: t, event: e, max: int64(t.folder.MaxFileSize), dir: h.Config.Server.SpoolDir, start: time.Now()}
+	if err := reserve(u, int64(h.Config.Server.MinSpoolFree)); err != nil {
+		return nil, h.finish(e, t, err)
 	}
-	f, err := os.CreateTemp(spoolDir, "up-*")
-	if err != nil {
+	if u.file, err = os.CreateTemp(u.dir, "up-*"); err != nil {
+		release(u)
 		return nil, h.finish(e, t, err)
 	}
 
-	ctx, span := h.startSpan("sftp.upload", t)
-	return &upload{h: h, t: t, event: e, file: f, max: int64(t.folder.MaxFileSize), start: time.Now(), ctx: ctx, span: span}, nil
+	u.ctx, u.span = h.startSpan("sftp.upload", t)
+	return u, nil
 }
 
 // upload is one file being received from the client.
@@ -85,9 +84,15 @@ type upload struct {
 	// max is the size limit in bytes; 0 means no limit.
 	max int64
 
+	// dir is the spool folder the file is written to.
+	dir string
+
 	mu   sync.Mutex
 	file *os.File
-	size int64
+
+	// size is how far into the file the client has written. It is atomic
+	// so the space check can read it without taking mu.
+	size atomic.Int64
 
 	// failed is set when the upload must not be saved, for example because
 	// the client disconnected or the file got too big.
@@ -112,7 +117,7 @@ func (u *upload) WriteAt(p []byte, off int64) (int, error) {
 	if err != nil {
 		u.failed = err
 	}
-	u.size = max(u.size, off+int64(n))
+	u.size.Store(max(u.size.Load(), off+int64(n)))
 	return n, err
 }
 
@@ -130,9 +135,10 @@ func (u *upload) Close() error {
 	defer u.mu.Unlock()
 	defer u.discardSpool()
 
+	size := u.size.Load()
 	e := u.event
-	e.Size = u.size
-	u.span.SetAttributes(attribute.Int64("sftpgate.size", u.size))
+	e.Size = size
+	u.span.SetAttributes(attribute.Int64("sftpgate.size", size))
 
 	// The client caused this (dropped connection, file too big), not the
 	// storage, so the error goes back as it is.
@@ -143,10 +149,16 @@ func (u *upload) Close() error {
 	}
 
 	_, write := tracing.Tracer.Start(u.ctx, "storage.write")
-	sha, err := storage.PutFile(context.Background(), u.t.bucket, u.t.key, u.file, u.size, map[string]string{
-		"sftpgate-account": u.h.Account.Name,
-		"sftpgate-ip":      u.h.IP,
-		"sftpgate-session": u.h.SessionID,
+	sha, err := storage.PutFile(context.Background(), u.t.bucket, u.t.key, u.file, size, storage.PutOptions{
+		Metadata: map[string]string{
+			"sftpgate-account": u.h.Account.Name,
+			"sftpgate-ip":      u.h.IP,
+			"sftpgate-session": u.h.SessionID,
+		},
+		// Without overwrite permission, the bucket itself refuses to replace
+		// a file. The check at open isn't enough: two uploads of the same name
+		// can both pass it before either one is saved.
+		IfNotExist: !u.t.folder.Perm.Has(config.PermOverwrite),
 	})
 	tracing.End(write, err)
 	defer func() { tracing.End(u.span, err) }()
@@ -157,8 +169,8 @@ func (u *upload) Close() error {
 	}
 
 	folder := u.t.folder.Path
-	metrics.TransferBytes.WithLabelValues(u.h.Account.Name, folder, "in").Add(float64(u.size))
-	u.h.BytesIn.Add(u.size)
+	metrics.TransferBytes.WithLabelValues(u.h.Account.Name, folder, "in").Add(float64(size))
+	u.h.BytesIn.Add(size)
 	metrics.TransferDuration.WithLabelValues("in").Observe(time.Since(u.start).Seconds())
 	u.h.record(e, u.t, nil)
 	u.afterUpload(sha)
@@ -178,7 +190,7 @@ func (u *upload) afterUpload(sha string) {
 		Storage:  u.t.folder.Storage,
 		Key:      u.t.key,
 		Filename: path.Base(u.t.rel),
-		Size:     u.size,
+		Size:     u.size.Load(),
 		SHA256:   sha,
 		Time:     time.Now(),
 
@@ -193,6 +205,7 @@ func (u *upload) afterUpload(sha string) {
 // discardSpool closes and deletes the spool file. A file left behind would
 // waste disk space, so a failure is logged.
 func (u *upload) discardSpool() {
+	release(u)
 	_ = u.file.Close()
 	if err := os.Remove(u.file.Name()); err != nil {
 		slog.Warn("could not remove spool file", "file", u.file.Name(), "err", err)

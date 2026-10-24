@@ -149,7 +149,7 @@ func (e *env) load(src string) {
 func (e *env) upload(folder, filename string, data []byte) {
 	e.t.Helper()
 	key := strings.TrimPrefix(folder, "/") + "/" + filename
-	sha, err := storage.PutFile(context.Background(), e.raw, key, bytes.NewReader(data), int64(len(data)), nil)
+	sha, err := storage.PutFile(context.Background(), e.raw, key, bytes.NewReader(data), int64(len(data)), storage.PutOptions{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestQueueSurvivesRestart(t *testing.T) {
 
 	// The mem:// bucket of the new registry is empty, so copy the file over.
 	data, _ := e.raw.ReadAll(context.Background(), "hook/a.csv")
-	_, _ = storage.PutFile(context.Background(), buckets.Bucket(e.cfg.Load(), "raw"), "hook/a.csv", bytes.NewReader(data), int64(len(data)), nil)
+	_, _ = storage.PutFile(context.Background(), buckets.Bucket(e.cfg.Load(), "raw"), "hook/a.csv", bytes.NewReader(data), int64(len(data)), storage.PutOptions{})
 
 	restarted.RunDue(context.Background())
 	if len(e.hook.calls()) != 1 || len(e.queued("")) != 0 {

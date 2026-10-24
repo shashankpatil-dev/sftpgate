@@ -73,6 +73,11 @@ func (r *run) pull() error {
 		}
 
 		ev.SHA256, err = r.pullFile(client, remotePath, bucket, key, e.Size())
+		// Another run or pod stored it in the meantime: nothing to do.
+		if errors.Is(err, storage.ErrExists) {
+			r.count("skipped")
+			continue
+		}
 		if err == nil && pl.DeleteAfter {
 			if err = client.Remove(remotePath); err != nil {
 				err = fmt.Errorf("saved, but could not delete the remote file: %w", err)
@@ -111,9 +116,13 @@ func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Buck
 		return "", fmt.Errorf("remote file changed while reading (%d bytes, expected %d)", n, size)
 	}
 
-	return storage.PutFile(r.ctx, bucket, key, tmp, n, map[string]string{
-		"sftpgate-transfer": r.t.Name,
-		"sftpgate-remote":   r.t.Pull.From.Remote + ":" + remotePath,
+	return storage.PutFile(r.ctx, bucket, key, tmp, n, storage.PutOptions{
+		Metadata: map[string]string{
+			"sftpgate-transfer": r.t.Name,
+			"sftpgate-remote":   r.t.Pull.From.Remote + ":" + remotePath,
+		},
+		// Never replace a file that appeared since the check above.
+		IfNotExist: true,
 	})
 }
 

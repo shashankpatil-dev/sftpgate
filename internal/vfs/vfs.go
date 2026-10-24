@@ -229,7 +229,7 @@ func clientError(t *target, err error) error {
 		return err
 	case gcerrors.Code(err) == gcerrors.NotFound:
 		return sftp.ErrSSHFxNoSuchFile
-	case errors.Is(err, errTooLarge), errors.Is(err, errNotEmpty), errors.Is(err, errSpoolFull):
+	case errors.Is(err, errTooLarge), errors.Is(err, errNotEmpty), errors.Is(err, errSpoolFull), errors.Is(err, storage.ErrExists):
 		return err
 	}
 

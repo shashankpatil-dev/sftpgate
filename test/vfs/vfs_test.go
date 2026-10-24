@@ -41,6 +41,11 @@ accounts:
         perms: [upload]
         patterns: ["*.csv"]
         max_file_size: 1KiB
+      - path: /bulk
+        storage: raw
+        prefix: acme/bulk
+        perms: [upload]
+        max_file_size: 100MiB
       - path: /outbound
         storage: raw
         prefix: acme/out
@@ -51,19 +56,29 @@ accounts:
 type env struct {
 	client *sftp.Client
 	bucket *blob.Bucket
+	cfg    *config.Config
+	reg    *storage.Registry
 
-	// done is closed when the server side has finished.
+	// done is closed when the first client's server side has finished.
 	done chan struct{}
 
-	// clientConn closes the client side, to simulate a dropped connection.
+	// clientConn closes the first client's side, to simulate a dropped connection.
 	clientConn io.Closer
 }
 
 func newEnv(t *testing.T) *env {
+	return newEnvWith(t, nil)
+}
+
+// newEnvWith is newEnv with a change to the test config.
+func newEnvWith(t *testing.T, edit func(string) string) *env {
 	t.Helper()
 	audit.SetOutput(io.Discard)
 
 	src := strings.Replace(testConfig, "SPOOL", t.TempDir(), 1)
+	if edit != nil {
+		src = edit(src)
+	}
 	cfg, err := config.Parse([]byte(src), config.Options{Offline: true})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +88,18 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 
-	h := &vfs.Handler{Config: cfg, Account: cfg.Account("acme"), Buckets: reg, SessionID: "s1", IP: "10.0.0.1"}
+	e := &env{bucket: reg.Bucket(cfg, "raw"), cfg: cfg, reg: reg}
+	var done chan struct{}
+	e.client, e.clientConn, done = e.connect(t)
+	e.done = done
+	return e
+}
+
+// connect opens one more SFTP session to the same buckets, like a second
+// partner connecting at the same time.
+func (e *env) connect(t *testing.T) (*sftp.Client, io.Closer, chan struct{}) {
+	t.Helper()
+	h := &vfs.Handler{Config: e.cfg, Account: e.cfg.Account("acme"), Buckets: e.reg, SessionID: "s1", IP: "10.0.0.1"}
 
 	serverR, clientW := io.Pipe()
 	clientR, serverW := io.Pipe()
@@ -82,19 +108,19 @@ func newEnv(t *testing.T) *env {
 		io.WriteCloser
 	}{serverR, serverW}, h.Handlers())
 
-	e := &env{bucket: reg.Bucket(cfg, "raw"), done: make(chan struct{}), clientConn: clientW}
+	done := make(chan struct{})
 	go func() {
 		_ = srv.Serve()
 		_ = srv.Close()
-		close(e.done)
+		close(done)
 	}()
 
-	e.client, err = sftp.NewClientPipe(clientR, clientW)
+	client, err := sftp.NewClientPipe(clientR, clientW)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = e.client.Close() })
-	return e
+	t.Cleanup(func() { _ = client.Close() })
+	return client, clientW, done
 }
 
 func (e *env) put(p, data string) error {
@@ -240,7 +266,7 @@ func TestDownloadAndList(t *testing.T) {
 	}
 
 	root, err := e.client.ReadDir("/")
-	if err != nil || len(root) != 2 || root[0].Name() != "inbound" || !root[0].IsDir() {
+	if err != nil || len(root) != 3 || root[0].Name() != "inbound" || !root[0].IsDir() {
 		t.Fatalf("root listing = %v, %v", names(root), err)
 	}
 	out, err := e.client.ReadDir("/outbound")
@@ -334,4 +360,67 @@ func TestLargeDirectoryListsEverything(t *testing.T) {
 	if entries[0].Name() != "f00000.csv" || entries[files-1].Name() != "f11999.csv" {
 		t.Fatalf("unexpected first/last entries %s, %s", entries[0].Name(), entries[files-1].Name())
 	}
+}
+
+// Two partners upload the same name into a folder without overwrite. Both
+// pass the "does it exist?" check at open, so the bucket itself must refuse
+// the second save. The first file must survive untouched.
+func TestSameNameRaceWithoutOverwrite(t *testing.T) {
+	e := newEnv(t)
+	other, _, _ := e.connect(t)
+
+	f1, err := e.client.Create("/inbound/race.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := other.Create("/inbound/race.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f1.Write([]byte("first"))
+	_, _ = f2.Write([]byte("second"))
+
+	if err := f1.Close(); err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+	err = f2.Close()
+	if err == nil || !strings.Contains(err.Error(), "file already exists") {
+		t.Fatalf("second upload must fail with 'file already exists', got %v", err)
+	}
+	if got, _ := e.object(t, "acme/in/race.csv"); got != "first" {
+		t.Fatalf("the first file was replaced: %q", got)
+	}
+}
+
+// An upload only starts when its whole max_file_size fits next to the uploads
+// already running, instead of failing halfway when the disk fills up.
+func TestUploadsReserveSpoolSpace(t *testing.T) {
+	free, err := vfs.FreeSpace(os.TempDir())
+	if err != nil || free < 400<<20 {
+		t.Skip("needs a few hundred MiB of free disk to test against")
+	}
+	// Room for one 100MiB upload, not two.
+	minFree := free - 150<<20
+	e := newEnvWith(t, func(s string) string {
+		return strings.Replace(s, "min_spool_free: 1MiB", fmt.Sprintf("min_spool_free: %d", minFree), 1)
+	})
+
+	first, err := e.client.Create("/bulk/a.csv")
+	if err != nil {
+		t.Fatalf("first upload must start: %v", err)
+	}
+	if _, err := e.client.Create("/bulk/b.csv"); err == nil || !strings.Contains(err.Error(), "out of upload space") {
+		t.Fatalf("second upload must be refused at open, got %v", err)
+	}
+
+	_, _ = first.Write([]byte("done"))
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The space is free again once the first upload finished.
+	third, err := e.client.Create("/bulk/c.csv")
+	if err != nil {
+		t.Fatalf("upload after the first finished must start: %v", err)
+	}
+	_ = third.Close()
 }

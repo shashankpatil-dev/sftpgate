@@ -238,10 +238,10 @@ func (r *Runner) copy(ctx context.Context, cur *current, c *config.Copy) error {
 		return err
 	}
 
-	_, err = storage.PutFile(ctx, bucket, key, f, info.Size(), map[string]string{
+	_, err = storage.PutFile(ctx, bucket, key, f, info.Size(), storage.PutOptions{Metadata: map[string]string{
 		"sftpgate-job":    cur.job.ID,
 		"sftpgate-source": cur.job.Storage + "/" + cur.job.Key,
-	})
+	}})
 	if err != nil {
 		return err
 	}
