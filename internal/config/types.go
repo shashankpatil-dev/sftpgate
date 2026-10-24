@@ -17,6 +17,7 @@ type Config struct {
 	HTTP     HTTP              `yaml:"http"`
 	Storages map[string]string `yaml:"storages"`
 	Accounts []*Account        `yaml:"accounts"`
+	Actions  Actions           `yaml:"actions"`
 
 	// Hash is the sha256 of the file, used to spot changes and shown in metrics.
 	Hash string `yaml:"-"`
@@ -45,6 +46,10 @@ type Server struct {
 	MinSpoolFree   Size          `yaml:"min_spool_free"`
 	ReloadInterval time.Duration `yaml:"reload_interval"`
 	Throttle       Throttle      `yaml:"throttle"`
+
+	// Timezone is used for {date} and {time} in copy keys.
+	Timezone string         `yaml:"timezone"`
+	Location *time.Location `yaml:"-"`
 }
 
 // Throttle blocks an IP for a while after too many failed logins.
@@ -99,6 +104,9 @@ type Folder struct {
 	Perms       []string `yaml:"perms"`
 	Patterns    []string `yaml:"patterns"`
 	MaxFileSize Size     `yaml:"max_file_size"`
+
+	// OnUpload runs, in order, after each file is saved to this folder.
+	OnUpload []*Step `yaml:"on_upload"`
 
 	Perm PermSet `yaml:"-"`
 }

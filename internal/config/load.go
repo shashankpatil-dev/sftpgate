@@ -162,7 +162,11 @@ func applyDefaults(c *Config) {
 	setDefault(&s.Throttle.MaxFailures, 5)
 	setDefault(&s.Throttle.Window, 10*time.Minute)
 	setDefault(&s.Throttle.Block, 15*time.Minute)
+	setDefault(&s.Timezone, "UTC")
 	setDefault(&c.HTTP.Listen, ":8080")
+	setDefault(&c.Actions.Workers, 4)
+	setDefault(&c.Actions.MaxAttempts, 8)
+	setDefault(&c.Actions.Backoff, 30*time.Second)
 
 	for _, a := range c.Accounts {
 		setDefault(&a.Auth.Mode, ModeAny)

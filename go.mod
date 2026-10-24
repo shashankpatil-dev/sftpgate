@@ -12,6 +12,11 @@ require (
 )
 
 require (
+	github.com/ProtonMail/go-crypto v1.5.2
+	github.com/cloudflare/circl v1.6.3 // indirect
+)
+
+require (
 	cel.dev/expr v0.25.3 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.23.2 // indirect

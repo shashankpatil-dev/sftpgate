@@ -9,6 +9,9 @@ import (
 	"os"
 	"strings"
 
+	// The container image has no time zone files, so embed them for server.timezone.
+	_ "time/tzdata"
+
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 

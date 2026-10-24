@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh"
@@ -82,6 +83,16 @@ func (c *checker) server(cfg *Config) {
 
 	if s.MaxAuthTries < 1 || s.Throttle.MaxFailures < 1 {
 		c.fail("server", "max_auth_tries and throttle.max_failures must be at least 1")
+	}
+
+	loc, err := time.LoadLocation(s.Timezone)
+	if err != nil {
+		c.fail("server.timezone", "unknown time zone %q (use e.g. UTC or Asia/Kolkata)", s.Timezone)
+	}
+	cfg.Server.Location = loc
+
+	if cfg.Actions.Workers < 1 || cfg.Actions.MaxAttempts < 1 || cfg.Actions.Backoff <= 0 {
+		c.fail("actions", "workers, max_attempts and backoff must all be above zero")
 	}
 }
 
@@ -224,6 +235,8 @@ func (c *checker) folder(p string, f *Folder, storages map[string]string) {
 	if f.MaxFileSize < 0 {
 		c.fail(p+".max_file_size", "must be 0 or more")
 	}
+
+	c.steps(p, f.OnUpload, storages)
 }
 
 // prefixes parses a list of IPs and CIDR ranges. A single IP becomes a
