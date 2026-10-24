@@ -1,0 +1,69 @@
+# A production-style SFTPgate config.
+#
+# This file is safe to keep in git: it holds no secret values. Secrets are
+# only references like ${env:NAME} or ${file:/path}, filled in at runtime from
+# a Kubernetes Secret, Docker secret or your CI's secret store.
+#
+# Check it with:  sftpgate validate -offline examples/sftpgate.yaml
+
+version: 1
+
+server:
+  listen: ":2222"
+  host_keys:
+    - /etc/sftpgate/keys/ssh_host_ed25519_key
+  # Leave empty to allow any IP here and rely on each account's own list.
+  allow_ips: []
+  banner: "Authorized use only. All access is logged."
+  idle_timeout: 15m
+  spool_dir: /var/lib/sftpgate/spool
+  throttle:
+    max_failures: 5
+    window: 10m
+    block: 15m
+
+http:
+  listen: ":8080"
+
+# Each storage is a bucket URL. Cloud credentials come from the environment
+# (workload identity, IAM role, AWS_* variables), never from this file.
+storages:
+  recon-raw: "gs://acme-recon-raw"
+  reports: "s3://acme-reports?region=ap-south-1"
+
+accounts:
+  # A payment gateway that uploads daily settlement files and downloads
+  # our reconciliation reports. It must use its key AND its password.
+  - name: razorpay
+    description: Settlement reconciliation
+    auth:
+      mode: all
+      public_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl razorpay-prod"
+      password_hash: "${env:RAZORPAY_PW_HASH}"
+    allow_ips: ["52.66.0.0/16", "13.232.10.4"]
+    max_sessions: 5
+    folders:
+      - path: /inbound
+        storage: recon-raw
+        prefix: razorpay/
+        perms: [list, upload]
+        patterns: ["*.csv", "*.csv.pgp"]
+        max_file_size: 500MiB
+      - path: /outbound
+        storage: reports
+        prefix: razorpay/
+        perms: [list, download, delete]
+
+  # A GST filing partner that only downloads the files we prepare.
+  - name: gst-partner
+    description: Monthly GST return files
+    auth:
+      public_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl gst-partner"
+    allow_ips: ["203.0.113.0/24"]
+    folders:
+      - path: /returns
+        storage: reports
+        prefix: gst/
+        perms: [list, download]

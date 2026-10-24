@@ -41,12 +41,12 @@ func Parse(raw []byte, opt Options) (*Config, error) {
 	strict := yaml.NewDecoder(bytes.NewReader(raw))
 	strict.KnownFields(true)
 	if err := strict.Decode(&Config{}); err != nil {
-		return nil, fmt.Errorf("yaml: %w", err)
+		return nil, err
 	}
 
 	var root yaml.Node
 	if err := yaml.Unmarshal(raw, &root); err != nil {
-		return nil, fmt.Errorf("yaml: %w", err)
+		return nil, err
 	}
 
 	refs, err := resolveRefs(&root, opt.Offline)
@@ -56,17 +56,22 @@ func Parse(raw []byte, opt Options) (*Config, error) {
 
 	cfg := &Config{}
 	if err := root.Decode(cfg); err != nil {
-		return nil, fmt.Errorf("yaml: %w", err)
+		return nil, err
 	}
 	applyDefaults(cfg)
 	if err := validate(cfg, refs, opt); err != nil {
 		return nil, err
 	}
 
-	sum := sha256.Sum256(raw)
-	cfg.Hash = hex.EncodeToString(sum[:])
+	cfg.Hash = HashOf(raw)
 	cfg.Raw = raw
 	return cfg, nil
+}
+
+// HashOf returns the hash used to tell config versions apart.
+func HashOf(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // resolveRefs replaces every ${env:...} and ${file:...} with its real value.
