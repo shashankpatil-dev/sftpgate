@@ -438,5 +438,5 @@ flowchart LR
 |---|---|
 | Spool disk fills with large concurrent uploads | Size limits per folder. Document spool sizing. Expose a free-space metric. Refuse new uploads below a free-space threshold. |
 | Clients that expect POSIX semantics (append, resume, atomic rename) | Fail clearly with SFTP error codes. Document limitations. Test the major clients. |
-| Legacy vendor clients needing old algorithms | Opt-in `legacy_algorithms` flag, default off (open question in PRD). |
+| Legacy vendor clients needing old algorithms | Not supported, by decision: SHA-1 algorithms are never enabled. Vendors must upgrade their client (OpenSSH 7.2+, JSch 0.1.54+ forks such as mwiede/jsch, Paramiko 2.9+). |
 | `PartialSuccessError` requires a recent `x/crypto` | Pin a version that has it. Covered by an integration test. |

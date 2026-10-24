@@ -90,7 +90,6 @@ server:
   banner: ""                                 # optional pre-auth banner
   idle_timeout: 15m                          # close idle sessions; default 15m
   max_auth_tries: 6                          # per connection; default 6 (same as OpenSSH)
-  legacy_algorithms: false                   # see PRD open question 4
   spool_dir: /var/lib/sftpgate/spool         # default
   min_spool_free: 1GiB                       # refuse uploads below this; default 1GiB
   timezone: UTC                              # for {date} templates & schedules; default UTC
@@ -390,8 +389,8 @@ cfg := &ssh.ServerConfig{
     ServerVersion:             "SSH-2.0-SFTPgate",
 }
 for _, k := range hostKeys { cfg.AddHostKey(k) }
-// legacy_algorithms=false: x/crypto defaults (no SHA-1 kex/MACs, no ssh-rsa sig).
-// legacy_algorithms=true: append ssh-rsa / diffie-hellman-group14-sha1 explicitly.
+// Always the x/crypto defaults: no SHA-1 key exchange, MACs or ssh-rsa signatures.
+// There is no switch to turn them on (PRD open question 4: decided no).
 ```
 
 ### 4.3 Authentication

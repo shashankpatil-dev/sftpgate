@@ -153,4 +153,4 @@ Stated explicitly so they don't creep in:
 1. Account naming: is one account = one SFTP login enough, or do partners need several logins sharing folders? (Proposed: one login per account. Duplicate YAML via anchors if needed.)
 2. Should the `all` auth mode allow ordering (password first, then key)? (Proposed: key first, then password, which is the common client behaviour.)
 3. Do we need SSH certificate auth (CA-signed user keys) for internal services? (Proposed: later, only if asked.)
-4. Do legacy vendor clients (old JSch, `ssh-rsa` SHA-1) need to be supported via an explicit opt-in flag? (Proposed: opt-in `server.legacy_algorithms`, default off.)
+4. ~~Do legacy vendor clients (old JSch, `ssh-rsa` SHA-1) need support?~~ **Decided: no.** SHA-1 algorithms are never enabled. Vendors on old clients must upgrade, since keeping weak crypto alive is their tech debt, not ours.
