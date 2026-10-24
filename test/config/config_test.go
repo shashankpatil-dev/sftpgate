@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh"
+
+	// An in-memory secret store, so ${secret:} can be tested without a cloud account.
+	_ "gocloud.dev/runtimevar/constantvar"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 )
@@ -180,5 +184,32 @@ func TestParseSize(t *testing.T) {
 		if _, err := config.ParseSize(in); err == nil {
 			t.Errorf("%s: want error", in)
 		}
+	}
+}
+
+func TestSecretReference(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret"), 10)
+	ref := "${secret:constant://?val=" + url.QueryEscape(string(hash)) + "}"
+	key := hostKeyFile(t)
+
+	src := strings.Replace(base(key), "${env:TEST_PW_HASH}", ref, 1)
+	cfg, err := config.Parse([]byte(src), config.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Account("razorpay").Auth.PasswordHash; got != string(hash) {
+		t.Fatalf("password hash from secret store = %q", got)
+	}
+
+	// A secret store that doesn't exist is reported with the field's path.
+	bad := strings.Replace(base(key), "${env:TEST_PW_HASH}", "${secret:nosuchstore://x}", 1)
+	_, err = config.Parse([]byte(bad), config.Options{})
+	if err == nil || !strings.Contains(err.Error(), "accounts[0].auth.password_hash: secret:") {
+		t.Fatalf("want a secret error, got %v", err)
+	}
+
+	// Offline, secret references are not read at all.
+	if _, err := config.Parse([]byte(bad), config.Options{Offline: true}); err != nil {
+		t.Fatalf("offline must not read secrets: %v", err)
 	}
 }

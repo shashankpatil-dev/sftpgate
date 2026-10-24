@@ -182,7 +182,7 @@ func (c *checker) auth(p string, a *Account) {
 	hasPassword := au.PasswordHash != "" || isRef
 	switch {
 	case hasPassword && !isRef:
-		c.fail(hp, "inline secret not allowed, use ${env:NAME} or ${file:/path}")
+		c.fail(hp, "inline secret not allowed, use ${env:NAME}, ${file:/path} or ${secret:url}")
 	case hasPassword && !c.unresolved(hp):
 		cost, err := bcrypt.Cost([]byte(au.PasswordHash))
 		if err != nil || cost < 10 {

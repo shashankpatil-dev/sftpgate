@@ -115,6 +115,12 @@ filled in at runtime:
 
 - `${env:NAME}`: an environment variable
 - `${file:/path}`: a file, for example a mounted Kubernetes or Docker secret
+- `${secret:URL}`: a cloud secret store, read with the same credentials as the buckets:
+  - `gcpsecretmanager://projects/PROJECT/secrets/NAME`
+  - `awssecretsmanager://NAME?region=ap-south-1`
+  - `awsparamstore://NAME?region=ap-south-1`
+
+Send `SIGHUP` after rotating a secret: every reference is read again on reload.
 
 `sftpgate validate` refuses a config with a password hash written inline.
 Public keys are not secret and can be written inline.

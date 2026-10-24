@@ -191,6 +191,6 @@ func (c *checker) secret(p, value string, required bool) {
 	case value == "" && !isRef && required:
 		c.fail(p, "is required")
 	case value != "" && !isRef:
-		c.fail(p, "inline secret not allowed, use ${env:NAME} or ${file:/path}")
+		c.fail(p, "inline secret not allowed, use ${env:NAME}, ${file:/path} or ${secret:url}")
 	}
 }

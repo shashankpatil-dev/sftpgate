@@ -21,7 +21,7 @@ type Options struct {
 	Offline bool
 }
 
-// refRe matches references like ${env:NAME} and ${file:/path}.
+// refRe matches references like ${env:NAME}, ${file:/path} and ${secret:url}.
 var refRe = regexp.MustCompile(`\$\{(\w+):([^}]*)\}`)
 
 // Load reads a config file from disk and checks it.
@@ -102,19 +102,22 @@ func resolveRefs(root *yaml.Node, offline bool) (map[string]bool, error) {
 // resolveRef returns the value behind one reference.
 // Offline, every reference becomes an empty string.
 func resolveRef(kind, arg string, offline bool) (string, error) {
-	if kind != "env" && kind != "file" {
-		return "", fmt.Errorf("unsupported reference ${%s:...} (use env or file)", kind)
+	if kind != "env" && kind != "file" && kind != "secret" {
+		return "", fmt.Errorf("unsupported reference ${%s:...} (use env, file or secret)", kind)
 	}
 	if offline {
 		return "", nil
 	}
 
-	if kind == "env" {
+	switch kind {
+	case "env":
 		v, ok := os.LookupEnv(arg)
 		if !ok {
 			return "", fmt.Errorf("env %s not set", arg)
 		}
 		return v, nil
+	case "secret":
+		return readSecret(arg)
 	}
 
 	b, err := os.ReadFile(arg)

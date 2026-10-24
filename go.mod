@@ -12,6 +12,12 @@ require (
 )
 
 require (
+	cloud.google.com/go/secretmanager v1.21.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.48.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.77.0 // indirect
+)
+
+require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/cloudflare/circl v1.6.3 // indirect
 )
