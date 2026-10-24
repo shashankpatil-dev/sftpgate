@@ -1,0 +1,50 @@
+# Local test setup: SFTPgate with an S3 mock and a GCS emulator.
+#
+#   make dev-keys   # once, creates test keys in .dev/keys
+#   make up         # start everything
+#   make e2e        # run the end-to-end checks
+#
+# Then: sftp -P 2222 -i .dev/keys/demo_user demo@localhost
+
+name: sftpgate-dev
+
+services:
+  sftpgate:
+    build: ../..
+    ports:
+      - "2222:2222"
+      - "8080:8080"
+    environment:
+      # Dev-only hash of the password "demo". Real secrets come from your secret store.
+      DEMO_PW_HASH: "$$2a$$10$$2Gafkwej3cTm6teT4wIDAu2H.NtwtNJw9zUmmREU.5pRKdLIStkme"
+      # The S3 mock accepts any credentials, but the AWS client needs some.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      # Sends gs:// traffic to the GCS emulator instead of Google.
+      STORAGE_EMULATOR_HOST: fake-gcs:4443
+    volumes:
+      - ./dev.yaml:/etc/sftpgate/sftpgate.yaml:ro
+      - ../../.dev/keys:/etc/sftpgate/keys:ro
+      - spool:/var/lib/sftpgate/spool
+    read_only: true
+    depends_on:
+      s3:
+        condition: service_started
+      fake-gcs:
+        condition: service_started
+    restart: on-failure
+
+  s3:
+    image: adobe/s3mock:4.7.0
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: recon-raw
+
+  fake-gcs:
+    image: fsouza/fake-gcs-server:1.52.2
+    command: ["-scheme", "http", "-port", "4443", "-public-host", "fake-gcs:4443", "-backend", "memory", "-data", "/data"]
+    volumes:
+      # Each folder under gcs-data becomes a bucket.
+      - ./gcs-data:/data:ro
+
+volumes:
+  spool:

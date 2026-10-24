@@ -1,0 +1,29 @@
+# Config for the local test setup in docker-compose.yml.
+# One demo account sees two folders: one backed by an S3 mock, one by a GCS emulator.
+
+version: 1
+
+server:
+  host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
+  min_spool_free: 100MiB
+  reload_interval: 2s
+
+storages:
+  s3: "s3://recon-raw?endpoint=http://s3:9090&use_path_style=true&region=us-east-1"
+  gcs: "gs://recon-raw"
+
+accounts:
+  - name: demo
+    description: Local test account (password is "demo")
+    auth:
+      public_keys: ["${file:/etc/sftpgate/keys/demo_user.pub}"]
+      password_hash: "${env:DEMO_PW_HASH}"
+    folders:
+      - path: /s3
+        storage: s3
+        prefix: demo/
+        perms: [list, download, upload, overwrite, delete, rename, mkdir]
+      - path: /gcs
+        storage: gcs
+        prefix: demo/
+        perms: [list, download, upload, overwrite, delete, rename, mkdir]
