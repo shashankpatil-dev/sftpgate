@@ -342,8 +342,17 @@ func (s *Server) reject(ev audit.Event, result, reason string) {
 func (s *Server) loginFailed(ev audit.Event, cfg *config.Config, ip netip.Addr, err error) {
 	var authErr *ssh.ServerAuthError
 	if !errors.As(err, &authErr) {
-		// The client went away or spoke bad SSH before trying to log in.
-		slog.Debug("handshake failed", "ip", ip, "err", err)
+		// Port checks and health probes connect and leave without a word:
+		// not worth a log line.
+		if ev.User == "" && errors.Is(err, io.EOF) {
+			slog.Debug("connection closed before login", "ip", ip)
+			return
+		}
+		// Anything else needs to be visible: a partner whose software can't
+		// agree on encryption with us would otherwise fail silently.
+		slog.Warn("ssh handshake failed", "ip", ip, "user", ev.User, "err", err)
+		ev.Event, ev.Result, ev.Error = "auth_failed", audit.Failed, "ssh handshake failed: "+err.Error()
+		audit.Emit(ev)
 		return
 	}
 

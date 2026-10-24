@@ -270,6 +270,10 @@ func TestSHA1IsRefused(t *testing.T) {
 		})
 	}
 
+	// Refused handshakes must be visible, so an operator can tell a partner
+	// why its old software can't connect.
+	h.audit.waitFor(t, `"error":"ssh handshake failed: ssh: no common algorithm for key exchange`)
+
 	// The same RSA key works fine with SHA-2 signatures.
 	c, err := h.dial("keyuser", ssh.PublicKeys(h.rsaKey))
 	if err != nil {
