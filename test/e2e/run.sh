@@ -10,6 +10,7 @@ PROMETHEUS=${PROMETHEUS:-http://localhost:9090}
 GRAFANA=${GRAFANA:-http://localhost:3000}
 JAEGER=${JAEGER:-http://localhost:16686}
 KEY=${KEY:-.dev/keys/demo_user}
+UI_TOKEN=${UI_TOKEN:-dev-only-ui-token}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -64,6 +65,15 @@ fi
 echo "checking metrics..."
 curl -fs "$HTTP/metrics" | grep -q 'sftpgate_operations_total{account="demo",folder="/s3",op="upload",result="ok"}' \
   || fail "upload metric missing"
+
+echo "checking the read-only API and UI..."
+curl -fs -u "e2e:$UI_TOKEN" "$HTTP/api/v1/status" | grep -q '"ready": true' || fail "API status is not ready"
+curl -fs -u "e2e:$UI_TOKEN" "$HTTP/api/v1/events?event=upload&account=demo" | grep -q '"result": "ok"' || fail "API shows no upload events"
+curl -fs -u "e2e:$UI_TOKEN" "$HTTP/ui/" | grep -q 'Open sessions' || fail "UI overview does not load"
+status=$(curl -s -o /dev/null -w '%{http_code}' "$HTTP/ui/")
+[ "$status" = "401" ] || fail "UI without a token answered $status, want 401"
+status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -u "e2e:$UI_TOKEN" "$HTTP/api/v1/status")
+[ "$status" = "405" ] || fail "POST to the API answered $status, want 405"
 
 echo "checking that Prometheus scrapes sftpgate..."
 for _ in $(seq 1 30); do

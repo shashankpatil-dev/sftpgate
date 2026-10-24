@@ -31,6 +31,7 @@ storage. Run `make down` to stop and delete everything.
 
 | What | Where |
 |---|---|
+| SFTPgate web UI | <http://localhost:8080/ui/> (any username, password `dev-only-ui-token`) |
 | Grafana dashboard | <http://localhost:3000> (opens without login; admin login is `admin` / `admin`) |
 | Prometheus and alerts | <http://localhost:9090/alerts> |
 | Traces (Jaeger) | <http://localhost:16686> |
@@ -68,6 +69,31 @@ A failed job is retried with a growing wait (30s, 1m, 2m and so on, up to 1h).
 After `max_attempts` it moves to `queue/failed`. To run it again, move its file
 back into `queue`. A job can run more than once, so webhook receivers should
 ignore a `job_id` they have already seen.
+
+## Web UI and API
+
+A read-only web page and JSON API show open sessions, recent events, the
+post-upload queue and the running config. They are off until you set tokens:
+
+```yaml
+http:
+  tokens: ["${env:SFTPGATE_UI_TOKEN}"]   # at least 16 characters
+```
+
+In a browser, log in with any username and a token as the password. Scripts
+send `Authorization: Bearer <token>`.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/status` | version, uptime, config hash, readiness, session and queue counts |
+| `GET /api/v1/sessions` | open sessions with bytes moved |
+| `GET /api/v1/events?event=&account=&result=&limit=` | the newest audit events kept in memory (up to 2000) |
+| `GET /api/v1/actions` | post-upload jobs waiting and failed |
+| `GET /api/v1/config` | the config file as written (secrets only as references) |
+
+Nothing can be changed here. There are only GET routes; changes go through git.
+The events list is in memory and starts empty after a restart. Full history
+is in your log system.
 
 ## Monitoring
 
@@ -167,6 +193,7 @@ disconnected. An invalid file is rejected, and the old config keeps running.
 | 8080 | `/metrics` | Prometheus metrics |
 | 8080 | `/healthz` | process is up |
 | 8080 | `/readyz` | config loaded and every storage reachable |
+| 8080 | `/ui/`, `/api/v1/` | read-only web UI and API (when `http.tokens` is set) |
 
 ## Development
 

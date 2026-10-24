@@ -59,9 +59,12 @@ type Throttle struct {
 	Block       time.Duration `yaml:"block"`
 }
 
-// HTTP holds the settings for the metrics and health endpoint.
+// HTTP holds the settings for the metrics, health, API and UI endpoint.
 type HTTP struct {
 	Listen string `yaml:"listen"`
+
+	// Tokens open the read-only API and UI. With no tokens they are off.
+	Tokens []string `yaml:"tokens"`
 }
 
 // Account is one SFTP login: a vendor, a partner or an internal service.

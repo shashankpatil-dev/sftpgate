@@ -213,3 +213,26 @@ func TestSecretReference(t *testing.T) {
 		t.Fatalf("offline must not read secrets: %v", err)
 	}
 }
+
+func TestHTTPTokens(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	withTokens := func(tokens string) string {
+		return strings.Replace(base(key), "storages:", "http:\n  tokens: ["+tokens+"]\nstorages:", 1)
+	}
+
+	t.Setenv("GOOD_TOKEN", "0123456789abcdef-long")
+	if _, err := config.Parse([]byte(withTokens(`"${env:GOOD_TOKEN}"`)), config.Options{}); err != nil {
+		t.Fatalf("valid token rejected: %v", err)
+	}
+
+	t.Setenv("SHORT_TOKEN", "short")
+	for tokens, want := range map[string]string{
+		`"written-inline-in-the-file"`: "http.tokens[0]: inline secret not allowed",
+		`"${env:SHORT_TOKEN}"`:         "http.tokens[0]: must be at least 16 characters",
+	} {
+		if _, err := config.Parse([]byte(withTokens(tokens)), config.Options{}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("tokens %s: want %q, got %v", tokens, want, err)
+		}
+	}
+}

@@ -325,6 +325,31 @@ func TestThrottleBlocksAfterFailures(t *testing.T) {
 	h.audit.waitFor(t, `"user":"pwuser"`)
 }
 
+func TestSessionsList(t *testing.T) {
+	h := newHarness(t, nil)
+	c, err := h.dial("keyuser", h.withKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	sftpRoundTrip(t, c)
+
+	sessions := h.srv.Sessions()
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %+v", sessions)
+	}
+	s := sessions[0]
+	if s.Account != "keyuser" || s.IP != "127.0.0.1" || s.Method != "publickey" || s.BytesIn != 5 || s.BytesOut != 5 {
+		t.Fatalf("session = %+v", s)
+	}
+
+	_ = c.Close()
+	h.audit.waitFor(t, `"event":"session_end"`)
+	if len(h.srv.Sessions()) != 0 {
+		t.Fatal("a closed session must leave the list")
+	}
+}
+
 func TestMaxSessions(t *testing.T) {
 	h := newHarness(t, nil)
 	first, err := h.dial("keyuser", h.withKey())

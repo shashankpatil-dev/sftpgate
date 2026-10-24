@@ -76,8 +76,16 @@ func serve(path string) error {
 		return err
 	}
 	httpSrv := &http.Server{
-		Addr:              cfg.HTTP.Listen,
-		Handler:           web.Handler(func(ctx context.Context) error { return buckets.Ping(ctx, r.current.Load()) }),
+		Addr: cfg.HTTP.Listen,
+		Handler: web.Handler(web.Source{
+			Version:  version,
+			Started:  time.Now(),
+			Revision: os.Getenv("SFTPGATE_REVISION"),
+			Config:   r.current.Load,
+			Ready:    func(ctx context.Context) error { return buckets.Ping(ctx, r.current.Load()) },
+			Sessions: srv.Sessions,
+			Actions:  runner.List,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

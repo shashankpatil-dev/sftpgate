@@ -52,6 +52,7 @@ func validate(cfg *Config, refs map[string]bool, opt Options) error {
 		c.fail("version", "must be 1")
 	}
 	c.server(cfg)
+	c.httpTokens(cfg.HTTP.Tokens)
 	c.storages(cfg.Storages)
 
 	cfg.byName = map[string]*Account{}
@@ -93,6 +94,18 @@ func (c *checker) server(cfg *Config) {
 
 	if cfg.Actions.Workers < 1 || cfg.Actions.MaxAttempts < 1 || cfg.Actions.Backoff <= 0 {
 		c.fail("actions", "workers, max_attempts and backoff must all be above zero")
+	}
+}
+
+// httpTokens checks the API and UI tokens. They are secrets, and they must
+// be long enough that guessing them is hopeless.
+func (c *checker) httpTokens(tokens []string) {
+	for i, tok := range tokens {
+		p := fmt.Sprintf("http.tokens[%d]", i)
+		c.secret(p, tok, true)
+		if c.refs[p] && !c.unresolved(p) && len(tok) < 16 {
+			c.fail(p, "must be at least 16 characters")
+		}
 	}
 }
 

@@ -10,6 +10,7 @@
 #   Grafana dashboard:  http://localhost:3000
 #   Prometheus:         http://localhost:9090 (Alerts tab shows the alert rules)
 #   Jaeger (traces):    http://localhost:16686
+#   SFTPgate web UI:    http://localhost:8080/ui/ (any user, password dev-only-ui-token)
 
 name: sftpgate-dev
 
@@ -28,6 +29,8 @@ services:
       # Sends gs:// traffic to the GCS emulator instead of Google.
       STORAGE_EMULATOR_HOST: fake-gcs:4443
       SFTPGATE_CONFIG: /etc/sftpgate/config/sftpgate.yaml
+      # Dev only: the password for the web UI at http://localhost:8080/ui/
+      SFTPGATE_UI_TOKEN: dev-only-ui-token
       # Sends traces to Jaeger. Without this variable tracing is off.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     volumes:
