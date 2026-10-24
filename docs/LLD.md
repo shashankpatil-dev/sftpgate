@@ -955,6 +955,8 @@ type Job struct {
 }
 ```
 
+> **As built in v0.2.** The queue is at `<spool_dir>/queue`, and temp files are `<spool_dir>/work-*` (deleted on startup). One dispatcher scans the queue every second, and right away when a job is added, and hands due jobs to `actions.workers` goroutines. Before any step runs, the landing object is downloaded and its SHA-256 compared with the one recorded at upload. A mismatch means the file changed in the bucket, which is a permanent failure. Permanent failures (folder or storage removed from the config, changed file, undecryptable data) go to `failed/` at once instead of being retried. Webhook payloads also carry `copies`: the storage and key written by earlier `copy` steps. `server.timezone` (default UTC; tz data is embedded in the binary because the image has none) sets `{date}` and `{time}`. PGP signatures are not verified (a recorded shortcut). An enqueue failure after a successful upload is logged and counted (`sftpgate_actions_total{step="queue",result="failed"}`, alert `SftpgateActionsNotQueued`), and the client still gets OK, because its file is safe.
+
 ### 10.2 Durable queue
 
 ```mermaid

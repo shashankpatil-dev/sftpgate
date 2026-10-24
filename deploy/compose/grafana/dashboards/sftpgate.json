@@ -777,6 +777,104 @@
     },
     {
       "id": 15,
+      "type": "timeseries",
+      "title": "Post-upload actions per minute",
+      "description": "Each PGP, copy and webhook step. step=queue counts files handed to the queue.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (step, result) (rate(sftpgate_actions_total{step!=\"job\"}[5m])) * 60",
+          "legendFormat": "{{step}} {{result}}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Post-upload queue",
+      "description": "pending: waiting to run or to retry. failed: gave up after max_attempts; their files are in queue/failed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sftpgate_actions_queue_depth",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
       "type": "table",
       "title": "Running config",
       "datasource": {
@@ -788,7 +886,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 44
       },
       "targets": [
         {

@@ -43,6 +43,18 @@ EOF
   cmp -s "$work/upload.bin" "$work/$folder.download" || fail "/$folder: downloaded file differs from uploaded file"
 done
 
+echo "checking that the post-upload copy reached /gcs/copies..."
+copied=""
+for _ in $(seq 1 15); do
+  if echo "get /gcs/copies/upload.bin $work/copied.bin" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null 2>&1; then
+    copied=yes
+    break
+  fi
+  sleep 1
+done
+[ -n "$copied" ] || fail "the on_upload copy never appeared in /gcs/copies"
+cmp -s "$work/upload.bin" "$work/copied.bin" || fail "the copied file differs from the uploaded file"
+
 echo "checking that shell access is refused..."
 if ssh -q -i "$KEY" -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes "demo@$HOST" true 2>/dev/null; then
   fail "a shell command was allowed"

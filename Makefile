@@ -40,6 +40,7 @@ dev-keys:
 ## up: start SFTPgate with the S3 mock and the GCS emulator
 up: dev-keys
 	$(COMPOSE) up -d --build
+	
 
 ## down: stop the local setup and delete its data
 down:

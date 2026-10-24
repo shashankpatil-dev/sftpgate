@@ -55,3 +55,24 @@ groups:
           severity: warning
         annotations:
           summary: Less than 2 GiB free on the upload spool disk. Large uploads will soon be refused.
+
+      - alert: SftpgateActionsRetrying
+        expr: sum(increase(sftpgate_actions_total{step="job", result="failed"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Post-upload actions are failing and being retried. Check the "action" lines in the audit log.
+
+      - alert: SftpgateActionsGaveUp
+        expr: sftpgate_actions_queue_depth{state="failed"} > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} post-upload job(s) gave up. Their files are in the bucket but were not processed; see the queue/failed folder."
+
+      - alert: SftpgateActionsNotQueued
+        expr: sum(increase(sftpgate_actions_total{step="queue", result="failed"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Files were saved but their post-upload actions could not be queued (spool disk full or not writable).

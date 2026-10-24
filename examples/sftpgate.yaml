@@ -17,6 +17,8 @@ server:
   banner: "Authorized use only. All access is logged."
   idle_timeout: 15m
   spool_dir: /var/lib/sftpgate/spool
+  # Used for {date} and {time} in copy keys.
+  timezone: Asia/Kolkata
   throttle:
     max_failures: 5
     window: 10m
@@ -30,6 +32,13 @@ http:
 storages:
   recon-raw: "gs://acme-recon-raw"
   reports: "s3://acme-reports?region=ap-south-1"
+  warehouse: "gs://acme-warehouse-landing"
+
+# How post-upload actions run. These are the defaults.
+actions:
+  workers: 4
+  max_attempts: 8
+  backoff: 30s
 
 accounts:
   # A payment gateway that uploads daily settlement files and downloads
@@ -50,6 +59,19 @@ accounts:
         perms: [list, upload]
         patterns: ["*.csv", "*.csv.pgp"]
         max_file_size: 500MiB
+        # After each upload: decrypt it, put the plain file in the warehouse
+        # bucket under today's date, then tell the recon service.
+        # The uploaded file itself is never changed.
+        on_upload:
+          - pgp_decrypt:
+              key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
+              passphrase: "${env:RECON_PGP_PASSPHRASE}"
+          - copy:
+              storage: warehouse
+              key: "razorpay/{date}/{filename}"
+          - webhook:
+              url: "https://recon.internal.acme.in/hooks/sftpgate"
+              secret: "${env:RECON_WEBHOOK_SECRET}"
       - path: /outbound
         storage: reports
         prefix: razorpay/

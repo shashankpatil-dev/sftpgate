@@ -39,13 +39,42 @@ The compose file is [`deploy/compose/docker-compose.yml`](deploy/compose/docker-
 and the config it runs is [`deploy/compose/config/sftpgate.yaml`](deploy/compose/config/sftpgate.yaml).
 Edit that file while it runs and SFTPgate reloads it within a few seconds.
 
+## Post-upload actions
+
+A folder can run steps after every upload. The uploaded file is never changed:
+steps work on a copy and write new files.
+
+```yaml
+folders:
+  - path: /inbound
+    storage: recon-raw
+    perms: [upload]
+    on_upload:
+      - pgp_decrypt: { key: "${file:/secrets/private.asc}", passphrase: "${env:PGP_PASS}" }
+      - copy: { storage: warehouse, key: "razorpay/{date}/{filename}" }
+      - webhook: { url: "https://recon.internal/hooks/sftpgate", secret: "${env:HOOK_SECRET}" }
+```
+
+| Step | What it does |
+|---|---|
+| `pgp_decrypt` | Decrypts the file (armored or binary). Strips `.pgp`, `.gpg` or `.asc` from the name. |
+| `pgp_encrypt` | Encrypts for `recipients` (armored public keys) and adds `.pgp`. |
+| `copy` | Saves the file to a storage. The key can use `{account}`, `{folder}`, `{date}`, `{time}`, `{filename}` and `{job_id}`. |
+| `webhook` | POSTs JSON describing the upload and the copies made so far. With a `secret`, the body is signed in the `X-Sftpgate-Signature: sha256=<hex HMAC>` header. |
+
+Jobs wait in a queue on disk (`<spool_dir>/queue`), so they survive restarts.
+A failed job is retried with a growing wait (30s, 1m, 2m and so on, up to 1h).
+After `max_attempts` it moves to `queue/failed`. To run it again, move its file
+back into `queue`. A job can run more than once, so webhook receivers should
+ignore a `job_id` they have already seen.
+
 ## Monitoring
 
 Ready-to-use files you can copy into your own setup:
 
 - [`deploy/compose/prometheus/alerts.yml`](deploy/compose/prometheus/alerts.yml):
   alerts for the server being down, login failure spikes, blocked IPs, storage
-  errors, rejected config reloads and a low spool disk.
+  errors, rejected config reloads, a low spool disk and failing post-upload actions.
 - [`deploy/compose/grafana/dashboards/sftpgate.json`](deploy/compose/grafana/dashboards/sftpgate.json):
   a dashboard with sessions, uploads, downloads, logins, traffic per account,
   transfer times, storage errors, denied requests and the running config version.
