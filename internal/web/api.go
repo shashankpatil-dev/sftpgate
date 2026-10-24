@@ -31,7 +31,7 @@ func (s *site) status(ctx context.Context) Status {
 		Started:       s.src.Started,
 		UptimeSeconds: int64(time.Since(s.src.Started).Seconds()),
 		ConfigHash:    s.src.Config().Hash,
-		Revision:      s.src.Revision,
+		Revision:      s.revision(),
 		Ready:         true,
 		Sessions:      len(s.src.Sessions()),
 	}
@@ -46,6 +46,13 @@ func (s *site) status(ctx context.Context) Status {
 		st.ActionsPending, st.ActionsFailed = len(pending), len(failed)
 	}
 	return st
+}
+
+func (s *site) revision() string {
+	if s.src.Revision == nil {
+		return ""
+	}
+	return s.src.Revision()
 }
 
 func (s *site) apiStatus(w http.ResponseWriter, r *http.Request) {

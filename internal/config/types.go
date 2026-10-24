@@ -19,6 +19,9 @@ type Config struct {
 	Accounts []*Account        `yaml:"accounts"`
 	Actions  Actions           `yaml:"actions"`
 
+	Remotes   map[string]*Remote `yaml:"remotes"`
+	Transfers []*Transfer        `yaml:"transfers"`
+
 	// Hash is the sha256 of the file, used to spot changes and shown in metrics.
 	Hash string `yaml:"-"`
 

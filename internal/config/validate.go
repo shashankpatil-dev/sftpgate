@@ -60,6 +60,9 @@ func validate(cfg *Config, refs map[string]bool, opt Options) error {
 		c.account(fmt.Sprintf("accounts[%d]", i), a, cfg)
 	}
 
+	c.remotes(cfg.Remotes)
+	c.transfers(cfg)
+
 	return joinErrs(c.errs)
 }
 

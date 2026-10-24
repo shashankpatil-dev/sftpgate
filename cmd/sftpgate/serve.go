@@ -21,6 +21,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/server"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
 	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
+	"github.com/shashankpatil-dev/sftpgate/internal/transfers"
 	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 	"github.com/shashankpatil-dev/sftpgate/internal/web"
 )
@@ -62,7 +63,7 @@ func serve(path string) error {
 	r.current.Store(cfg)
 	srv := server.New(r.current.Load, buckets)
 	r.server = srv
-	setConfigInfo(cfg)
+	r.setConfigInfo(cfg)
 	metrics.Prepare(cfg)
 
 	runner, err := actions.NewRunner(filepath.Join(cfg.Server.SpoolDir, "queue"), cfg.Server.SpoolDir, r.current.Load, buckets)
@@ -80,7 +81,7 @@ func serve(path string) error {
 		Handler: web.Handler(web.Source{
 			Version:  version,
 			Started:  time.Now(),
-			Revision: os.Getenv("SFTPGATE_REVISION"),
+			Revision: r.currentRevision,
 			Config:   r.current.Load,
 			Ready:    func(ctx context.Context) error { return buckets.Ping(ctx, r.current.Load()) },
 			Sessions: srv.Sessions,
@@ -96,6 +97,12 @@ func serve(path string) error {
 	go r.run(ctx, cfg.Server.ReloadInterval)
 	go watchSpool(ctx, cfg.Server.SpoolDir)
 	go runner.Run(ctx)
+
+	// With several replicas, set SFTPGATE_TRANSFERS=off on all but one, so
+	// each scheduled transfer runs once.
+	if os.Getenv("SFTPGATE_TRANSFERS") != "off" {
+		go transfers.NewScheduler(r.current.Load, buckets, cfg.Server.SpoolDir).Run(ctx)
+	}
 
 	slog.Info("sftpgate started", "version", version, "sftp", cfg.Server.Listen, "http", cfg.HTTP.Listen, "config", cfg.Hash)
 	err = srv.Serve(ctx, ln, shutdownGrace)
@@ -115,6 +122,8 @@ func prepareSpool(dir string) error {
 		return fmt.Errorf("spool dir: %w", err)
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(dir, "up-*"))
+	pulled, _ := filepath.Glob(filepath.Join(dir, "xfer-*"))
+	leftovers = append(leftovers, pulled...)
 	for _, f := range leftovers {
 		_ = os.Remove(f)
 	}
@@ -151,6 +160,9 @@ type reloader struct {
 	// rejected is the hash of the last file that failed, so a broken file
 	// is reported once instead of on every check.
 	rejected string
+
+	// revision is the git commit of the running config, when known.
+	revision atomic.Value
 }
 
 // run checks the file every interval, and right away on SIGHUP.
@@ -204,11 +216,11 @@ func (r *reloader) reload(ctx context.Context, force bool) {
 	r.rejected = ""
 	r.current.Store(cfg)
 	r.server.CloseChanged(cfg)
-	setConfigInfo(cfg)
+	r.setConfigInfo(cfg)
 	metrics.Prepare(cfg)
 	metrics.ConfigReloads.WithLabelValues(audit.OK).Inc()
 	audit.Emit(audit.Event{Event: "config_reload", Result: audit.OK, Config: cfg.Hash})
-	slog.Info("config reloaded", "config", cfg.Hash)
+	slog.Info("config reloaded", "config", cfg.Hash, "revision", r.currentRevision())
 }
 
 func (r *reloader) failed(old *config.Config, err error) {
@@ -217,9 +229,16 @@ func (r *reloader) failed(old *config.Config, err error) {
 	slog.Error("config reload rejected, keeping the old config", "err", err)
 }
 
-// setConfigInfo publishes which config is running. SFTPGATE_REVISION can
-// hold the git commit, for example when deployed by CI or git-sync.
-func setConfigInfo(cfg *config.Config) {
+// currentRevision returns the git commit of the running config, or "".
+func (r *reloader) currentRevision() string {
+	rev, _ := r.revision.Load().(string)
+	return rev
+}
+
+// setConfigInfo publishes which config, and which git commit, is running.
+func (r *reloader) setConfigInfo(cfg *config.Config) {
+	rev := config.Revision(r.path)
+	r.revision.Store(rev)
 	metrics.ConfigInfo.Reset()
-	metrics.ConfigInfo.WithLabelValues(cfg.Hash, os.Getenv("SFTPGATE_REVISION")).Set(1)
+	metrics.ConfigInfo.WithLabelValues(cfg.Hash, rev).Set(1)
 }

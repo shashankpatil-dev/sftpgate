@@ -39,6 +39,7 @@ type Event struct {
 	SHA256     string    `json:"sha256,omitempty"`
 	Config     string    `json:"config,omitempty"`
 	Job        string    `json:"job,omitempty"`
+	Transfer   string    `json:"transfer,omitempty"`
 	TraceID    string    `json:"trace_id,omitempty"`
 	Size       int64     `json:"size,omitempty"`
 	DurationMS int64     `json:"duration_ms,omitempty"`
@@ -85,6 +86,7 @@ func Emit(e Event) {
 	add("sha256", e.SHA256)
 	add("config", e.Config)
 	add("job", e.Job)
+	add("transfer", e.Transfer)
 	add("trace_id", e.TraceID)
 	if e.Size > 0 {
 		attrs = append(attrs, slog.Int64("size", e.Size))

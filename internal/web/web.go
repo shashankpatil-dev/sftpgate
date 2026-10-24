@@ -29,8 +29,8 @@ type Source struct {
 	Version string
 	Started time.Time
 
-	// Revision is the git commit of the config, if known (SFTPGATE_REVISION).
-	Revision string
+	// Revision returns the git commit of the running config, or "".
+	Revision func() string
 
 	Config   func() *config.Config
 	Ready    func(context.Context) error

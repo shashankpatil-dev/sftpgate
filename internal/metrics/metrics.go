@@ -78,6 +78,16 @@ var (
 		Help: "Post-upload jobs waiting to run (pending) or given up on (failed).",
 	}, []string{"state"})
 
+	TransferRuns = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sftpgate_transfer_runs_total",
+		Help: "Scheduled transfer runs, by transfer and result.",
+	}, []string{"transfer", "result"})
+
+	TransferFiles = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sftpgate_transfer_files_total",
+		Help: "Files moved by scheduled transfers. skipped means the file was already there.",
+	}, []string{"transfer", "result"})
+
 	ConfigInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "sftpgate_config_info",
 		Help: "Always 1. The labels tell which config is running.",
@@ -108,6 +118,14 @@ func Prepare(cfg *config.Config) {
 
 	for name := range cfg.Storages {
 		StorageErrors.WithLabelValues(name)
+	}
+
+	for _, t := range cfg.Transfers {
+		for _, result := range []string{"ok", "failed"} {
+			TransferRuns.WithLabelValues(t.Name, result)
+			TransferFiles.WithLabelValues(t.Name, result)
+		}
+		TransferFiles.WithLabelValues(t.Name, "skipped")
 	}
 
 	for _, a := range cfg.Accounts {

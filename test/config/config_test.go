@@ -236,3 +236,85 @@ func TestHTTPTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestTransferValidation(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	valid := `
+remotes:
+  bank:
+    addr: sftp.bank.example:22
+    user: acme
+    host_key: "` + testPubKey + `"
+    password: "${env:TEST_PW_HASH}"
+transfers:
+  - name: statements
+    schedule: "0 6 * * *"
+    pull:
+      from: { remote: bank, path: /out, pattern: "*.csv" }
+      to: { storage: raw, key: "bank/{date}/{filename}" }
+  - name: returns
+    schedule: "*/30 * * * *"
+    push:
+      from: { storage: raw, prefix: outbox/ }
+      to: { remote: bank, path: /in }
+      after: "move:sent/"
+`
+	if _, err := config.Parse([]byte(base(key)+valid), config.Options{}); err != nil {
+		t.Fatalf("valid transfers rejected: %v", err)
+	}
+
+	cases := []struct {
+		name, from, to, want string
+	}{
+		{"unknown remote", "remote: bank, path: /out", "remote: nope, path: /out", `unknown remote "nope"`},
+		{"key without filename", "bank/{date}/{filename}", "bank/{date}/x.csv", "must contain {filename}"},
+		{"unknown placeholder", "bank/{date}/{filename}", "bank/{user}/{filename}", "unknown placeholder {user}"},
+		{"bad schedule", `"0 6 * * *"`, `"every morning"`, "bad schedule"},
+		{"relative remote path", "path: /out", "path: out", "clean absolute path"},
+		{"bad after", `after: "move:sent/"`, `after: "archive"`, "must be keep, delete or move:<prefix>"},
+		{"move to same prefix", `after: "move:sent/"`, `after: "move:outbox/"`, "different from from.prefix"},
+		{"inline remote password", `password: "${env:TEST_PW_HASH}"`, `password: "hunter2"`, "inline secret not allowed"},
+		{"no host key", `host_key: "` + testPubKey + `"`, `host_key: ""`, "must be the remote's public host key"},
+		{"pull and push in one", "    pull:\n      from: { remote: bank, path: /out", "    push:\n      from: { storage: raw }\n      to: { remote: bank, path: /in }\n    pull:\n      from: { remote: bank, path: /out", "needs exactly one of pull or push"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(valid, tc.from) {
+				t.Fatalf("test setup: %q not found", tc.from)
+			}
+			src := base(key) + strings.Replace(valid, tc.from, tc.to, 1)
+			if _, err := config.Parse([]byte(src), config.Options{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestRevisionFromGitSyncPath(t *testing.T) {
+	// git-sync layout: /git/current -> /git/.worktrees/<commit>
+	root := t.TempDir()
+	commit := "3d9143ef3f90ffbbd2234ec7bb398beee70ada25"
+	worktree := filepath.Join(root, ".worktrees", commit)
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "sftpgate.yaml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(worktree, filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SFTPGATE_REVISION", "")
+	if got := config.Revision(filepath.Join(root, "current", "sftpgate.yaml")); got != commit {
+		t.Fatalf("revision = %q, want %s", got, commit)
+	}
+	if got := config.Revision(hostKeyFile(t)); got != "" {
+		t.Fatalf("a plain path has no revision, got %q", got)
+	}
+	t.Setenv("SFTPGATE_REVISION", "from-ci")
+	if got := config.Revision(filepath.Join(root, "current", "sftpgate.yaml")); got != "from-ci" {
+		t.Fatalf("SFTPGATE_REVISION must win, got %q", got)
+	}
+}
