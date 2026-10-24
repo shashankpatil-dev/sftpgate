@@ -33,6 +33,7 @@ storage. Run `make down` to stop and delete everything.
 |---|---|
 | Grafana dashboard | <http://localhost:3000> (opens without login; admin login is `admin` / `admin`) |
 | Prometheus and alerts | <http://localhost:9090/alerts> |
+| Traces (Jaeger) | <http://localhost:16686> |
 | Raw metrics | <http://localhost:8080/metrics> |
 
 The compose file is [`deploy/compose/docker-compose.yml`](deploy/compose/docker-compose.yml),
@@ -78,6 +79,18 @@ Ready-to-use files you can copy into your own setup:
 - [`deploy/compose/grafana/dashboards/sftpgate.json`](deploy/compose/grafana/dashboards/sftpgate.json):
   a dashboard with sessions, uploads, downloads, logins, traffic per account,
   transfer times, storage errors, denied requests and the running config version.
+
+### Tracing
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector:4318`)
+to send OpenTelemetry traces over OTLP/HTTP. All the other standard `OTEL_*`
+variables work too. Without it, tracing is off and costs nothing.
+
+Each session is one trace with a span per upload, download and file command.
+Post-upload jobs get their own trace, linked to the upload, and webhooks
+carry a `traceparent` header so the receiver can continue the trace. Audit
+lines include `trace_id`. Spans never contain file names or object keys,
+because tracing tools are often less locked down than audit logs.
 
 Mount the config **folder**, not the single file, in Docker and Kubernetes.
 Editors and git replace files instead of changing them, and a single-file mount

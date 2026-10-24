@@ -1,5 +1,5 @@
-# Local test setup: SFTPgate with an S3 mock, a GCS emulator, Prometheus
-# and Grafana.
+# Local test setup: SFTPgate with an S3 mock, a GCS emulator, Prometheus,
+# Grafana and Jaeger.
 #
 #   make up         # start everything (creates test keys the first time)
 #   make e2e        # run the end-to-end checks
@@ -9,6 +9,7 @@
 #   sftp -P 2222 -i .dev/keys/demo_user demo@localhost
 #   Grafana dashboard:  http://localhost:3000
 #   Prometheus:         http://localhost:9090 (Alerts tab shows the alert rules)
+#   Jaeger (traces):    http://localhost:16686
 
 name: sftpgate-dev
 
@@ -27,6 +28,8 @@ services:
       # Sends gs:// traffic to the GCS emulator instead of Google.
       STORAGE_EMULATOR_HOST: fake-gcs:4443
       SFTPGATE_CONFIG: /etc/sftpgate/config/sftpgate.yaml
+      # Sends traces to Jaeger. Without this variable tracing is off.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     volumes:
       # Mount the folder, not the file. Editors and git replace files instead
       # of changing them, and a single-file mount would keep the old one,
@@ -39,6 +42,8 @@ services:
       s3:
         condition: service_started
       fake-gcs:
+        condition: service_started
+      jaeger:
         condition: service_started
     restart: on-failure
 
@@ -80,6 +85,11 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+
+  jaeger:
+    image: jaegertracing/jaeger:2.10.0
+    ports:
+      - "16686:16686"
 
 volumes:
   spool:

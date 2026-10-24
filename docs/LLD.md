@@ -68,7 +68,7 @@ Line budget (non-test Go, v0.1): config ~600, server ~500, vfs ~700, storage ~80
 | `github.com/prometheus/client_golang` | Metrics | — |
 | `github.com/ProtonMail/go-crypto` **[v0.2]** | OpenPGP | `x/crypto/openpgp` is deprecated. |
 | `github.com/robfig/cron/v3` **[v0.3]** | Cron parsing | — |
-| `go.opentelemetry.io/otel` + `otlptracegrpc` exporter **[v0.2]** | Traces | — |
+| `go.opentelemetry.io/otel` + `otlptracehttp` exporter **[v0.2]** | Traces | — |
 | `gocloud.dev/runtimevar` (`gcpsecretmanager`, `awssecretsmanager`, `awsparamstore`) **[v0.2]** | `${secret:}` refs | Same gocloud family already used for blob, so one URL style. |
 
 No CLI framework (stdlib `flag`), no logging library (`log/slog`), no web framework (`net/http` with Go 1.22+ routing patterns), no JS.
@@ -885,6 +885,7 @@ Cardinality is bounded: `account`, `folder`, `storage`, `step` and `job` all com
 
 ## 8a. Traces [v0.2]
 
+- **As built:** export is OTLP/**HTTP** (`otlptracehttp`), not gRPC, because it's simpler and passes through firewalls and proxies more easily. SFTPgate's spans go to their own tracer provider (`tracing.Use`). The **global** OpenTelemetry provider stays a no-op on purpose: gocloud creates its own spans for every bucket call, and their error messages contain object keys. A test checks that no span attribute holds a file name or key. The local setup includes Jaeger, and `make e2e` checks that traces arrive.
 - **Enablement:** the standard OTel env vars only (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER`…). If the endpoint is unset, a no-op tracer is used, at zero cost. No YAML keys.
 - **Span tree:**
 

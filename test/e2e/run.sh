@@ -8,6 +8,7 @@ PORT=${PORT:-2222}
 HTTP=${HTTP:-http://localhost:8080}
 PROMETHEUS=${PROMETHEUS:-http://localhost:9090}
 GRAFANA=${GRAFANA:-http://localhost:3000}
+JAEGER=${JAEGER:-http://localhost:16686}
 KEY=${KEY:-.dev/keys/demo_user}
 
 work=$(mktemp -d)
@@ -74,5 +75,16 @@ curl -fs "$PROMETHEUS/api/v1/rules" | grep -q 'SftpgateStorageErrors' || fail "a
 
 echo "checking the Grafana dashboard..."
 curl -fs "$GRAFANA/api/dashboards/uid/sftpgate" | grep -q '"title":"SFTPgate"' || fail "Grafana dashboard is missing"
+
+echo "checking that traces reach Jaeger..."
+traced=""
+for _ in $(seq 1 20); do
+  if curl -fs "$JAEGER/api/traces?service=sftpgate&operation=sftp.upload&limit=1" | grep -q '"operationName":"sftp.upload"'; then
+    traced=yes
+    break
+  fi
+  sleep 1
+done
+[ -n "$traced" ] || fail "no sftp.upload trace in Jaeger"
 
 echo "all end-to-end checks passed"
