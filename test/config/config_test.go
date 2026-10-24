@@ -1,0 +1,179 @@
+package config_test
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/shashankpatil-dev/sftpgate/internal/config"
+)
+
+const testPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test"
+
+func hostKeyFile(t *testing.T) string {
+	t.Helper()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "host_key")
+	if err := os.WriteFile(p, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// base returns a valid config; tests replace parts of it.
+func base(hostKey string) string {
+	return `
+version: 1
+server:
+  host_keys: [` + hostKey + `]
+  allow_ips: [10.0.0.0/8]
+storages:
+  raw: mem://
+accounts:
+  - name: razorpay
+    auth:
+      mode: all
+      public_keys: ["` + testPubKey + `"]
+      password_hash: ${env:TEST_PW_HASH}
+    allow_ips: [52.66.0.0/16, 13.232.10.4]
+    folders:
+      - path: /inbound
+        storage: raw
+        prefix: razorpay
+        perms: [list, upload]
+        patterns: ["*.csv"]
+        max_file_size: 500MiB
+`
+}
+
+func setHash(t *testing.T) {
+	h, _ := bcrypt.GenerateFromPassword([]byte("secret"), 10)
+	t.Setenv("TEST_PW_HASH", string(h))
+}
+
+func TestValidConfig(t *testing.T) {
+	setHash(t)
+	cfg, err := config.Parse([]byte(base(hostKeyFile(t))), config.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.Account("razorpay")
+	if a == nil || len(a.Keys) != 1 || len(a.IPs) != 2 || len(cfg.HostKeys) != 1 {
+		t.Fatalf("derived fields not filled: %+v", a)
+	}
+	f := a.Folder("/inbound")
+	if f.Prefix != "razorpay/" || !f.Perm.Has(config.PermUpload) || f.Perm.Has(config.PermDelete) || f.MaxFileSize != 500<<20 {
+		t.Fatalf("folder not normalized: %+v", f)
+	}
+	if cfg.Server.Listen != ":2222" || cfg.Server.Throttle.MaxFailures != 5 {
+		t.Fatal("defaults not applied")
+	}
+	if !strings.Contains(string(cfg.Raw), "${env:TEST_PW_HASH}") {
+		t.Fatal("Raw must keep refs, not secret values")
+	}
+}
+
+func TestValidationErrors(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	cases := []struct {
+		name, from, to, want string
+	}{
+		{"inline password", "${env:TEST_PW_HASH}", "hunter2", "accounts[0].auth.password_hash: inline secret not allowed"},
+		{"bad hash", "${env:TEST_PW_HASH}", "${env:NOT_A_HASH}", "possible plaintext password"},
+		{"missing env", "${env:TEST_PW_HASH}", "${env:NOPE_UNSET}", "env NOPE_UNSET not set"},
+		{"unknown ref", "${env:TEST_PW_HASH}", "${vault:x}", "unsupported reference"},
+		{"unknown field", "max_file_size:", "max_size:", "field max_size not found"},
+		{"bad cidr", "13.232.10.4", "13.232.10.999", "accounts[0].allow_ips[1]: invalid IP"},
+		{"bad perm", "[list, upload]", "[list, write]", `unknown permission "write"`},
+		{"unknown storage", "storage: raw", "storage: nope", `unknown storage "nope"`},
+		{"nested folder", "path: /inbound", "path: /in/bound", "single segment"},
+		{"dotdot prefix", "prefix: razorpay", "prefix: ../x", "no . or .. segments"},
+		{"bad scheme", "raw: mem://", "raw: ftp://x", "unsupported storage URL"},
+		{"bad name", "name: razorpay", "name: Razor Pay", "accounts[0].name"},
+		{"bad mode", "mode: all", "mode: weird", "must be any or all"},
+		{"bad size", "500MiB", "5 TB", "invalid size"},
+		{"bad pattern", `"*.csv"`, `"[x"`, "bad pattern"},
+	}
+	t.Setenv("NOT_A_HASH", "plaintext")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := strings.Replace(base(key), tc.from, tc.to, 1)
+			_, err := config.Parse([]byte(src), config.Options{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestModeAllNeedsBoth(t *testing.T) {
+	src := strings.Replace(base(hostKeyFile(t)), "      password_hash: ${env:TEST_PW_HASH}\n", "", 1)
+	_, err := config.Parse([]byte(src), config.Options{})
+	if err == nil || !strings.Contains(err.Error(), "mode all requires both") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestOffline(t *testing.T) {
+	// No env, no host key file: offline must still pass, and still catch inline secrets.
+	src := base("/does/not/exist")
+	if _, err := config.Parse([]byte(src), config.Options{Offline: true}); err != nil {
+		t.Fatalf("offline should pass: %v", err)
+	}
+	src = strings.Replace(src, "${env:TEST_PW_HASH}", "$2a$10$abcdefghijklmnopqrstuuMx0Z3Zl5z7ZbYqvJmQmX4o1zS4xU8hG", 1)
+	if _, err := config.Parse([]byte(src), config.Options{Offline: true}); err == nil || !strings.Contains(err.Error(), "inline secret") {
+		t.Fatalf("offline must reject inline secrets, got %v", err)
+	}
+}
+
+func TestRefCannotInjectYAML(t *testing.T) {
+	setHash(t)
+	t.Setenv("EVIL", "x\nversion: 2")
+	src := strings.Replace(base(hostKeyFile(t)), "raw: mem://", "raw: mem://${env:EVIL}", 1)
+	cfg, err := config.Parse([]byte(src), config.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != 1 || cfg.Storages["raw"] != "mem://x\nversion: 2" {
+		t.Fatalf("ref value leaked into structure: %+v", cfg.Storages)
+	}
+}
+
+func TestFingerprintChanges(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	a, _ := config.Parse([]byte(base(key)), config.Options{})
+	b, _ := config.Parse([]byte(strings.Replace(base(key), "[list, upload]", "[list]", 1)), config.Options{})
+	c, _ := config.Parse([]byte(base(key)+"\n# comment\n"), config.Options{})
+	if a.Account("razorpay").Fingerprint == b.Account("razorpay").Fingerprint {
+		t.Fatal("perm change must change fingerprint")
+	}
+	if a.Account("razorpay").Fingerprint != c.Account("razorpay").Fingerprint {
+		t.Fatal("comment-only change must not change fingerprint")
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	for in, want := range map[string]config.Size{"0": 0, "10": 10, "1KiB": 1024, "2 MiB": 2 << 20, "3GiB": 3 << 30, "7B": 7} {
+		if got, err := config.ParseSize(in); err != nil || got != want {
+			t.Errorf("%s: got %d %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"", "-1", "1TB", "abc", "1.5GiB"} {
+		if _, err := config.ParseSize(in); err == nil {
+			t.Errorf("%s: want error", in)
+		}
+	}
+}

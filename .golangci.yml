@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  # On top of the defaults (errcheck, govet, ineffassign, staticcheck, unused).
+  enable:
+    - errorlint
+    - gocritic
+    - misspell
+    - revive
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/shashankpatil-dev/sftpgate
