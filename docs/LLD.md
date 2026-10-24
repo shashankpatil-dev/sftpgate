@@ -24,7 +24,10 @@ sftpgate/
 ├── deploy/compose/               # docker-compose.yml, prometheus.yml, grafana/
 ├── examples/sftpgate.yaml        # annotated full example
 ├── schema/sftpgate.schema.json   # JSON Schema for editor validation
-├── test/e2e/                     # sftp batch scripts used by `make e2e`
+├── test/                         # all tests live here, apart from the code
+│   ├── config/  vfs/  server/    # package tests, using each package's public API
+│   ├── integration/              # real server on localhost + real SSH/SFTP clients
+│   └── e2e/                      # sftp batch checks against docker compose (`make e2e`)
 ├── docs/                         # PRD, HLD, LLD
 ├── Dockerfile
 ├── Makefile                      # build, test, lint, e2e, dev-keys
@@ -104,7 +107,7 @@ http:
 storages:                                    # name -> gocloud blob URL
   recon-raw: "gs://acme-recon-raw"
   reports:   "s3://acme-reports?region=ap-south-1"
-  dev:       "s3://dev?endpoint=http://minio:9000&region=us-east-1"   # exact s3blob params verified in v0.1
+  dev:       "s3://dev?endpoint=http://s3:9090&use_path_style=true&region=us-east-1"   # any S3-compatible store
   local:     "file:///data"
 
 accounts:
@@ -378,11 +381,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 
 ```go
 cfg := &ssh.ServerConfig{
-    MaxAuthTries:      cfg.Server.MaxAuthTries,
-    PublicKeyCallback: a.publicKey,   // closures over ip + pinned snapshot
-    PasswordCallback:  a.password,
-    BannerCallback:    banner,
-    ServerVersion:     "SSH-2.0-SFTPgate",
+    MaxAuthTries:              cfg.Server.MaxAuthTries,
+    PublicKeyCallback:         a.publicKey,          // is this key allowed?
+    VerifiedPublicKeyCallback: a.verifiedPublicKey,  // client proved it owns the key
+    PasswordCallback:          a.password,
+    AuthLogCallback:           a.logAttempt,         // remembers the username for audit
+    BannerCallback:            banner,
+    ServerVersion:             "SSH-2.0-SFTPgate",
 }
 for _, k := range hostKeys { cfg.AddHostKey(k) }
 // legacy_algorithms=false: x/crypto defaults (no SHA-1 kex/MACs, no ssh-rsa sig).
@@ -394,11 +399,12 @@ for _, k := range hostKeys { cfg.AddHostKey(k) }
 ```mermaid
 flowchart TD
   S["auth attempt: user, method, ip"] --> A{"account exists and<br/>IP in its allowlist?"}
-  A -->|no| F["fail: throttle.Fail(ip)<br/>audit auth_failed"]
+  A -->|no| F["fail<br/>if the whole login fails: one<br/>throttle.Fail(ip), audit auth_failed"]
   A -->|yes| M{"method"}
   M -->|publickey| K{"key matches?<br/>constant time"}
   K -->|no| F
-  K -->|yes| MD{"auth.mode"}
+  K -->|yes| V["client proves it owns the key<br/>VerifiedPublicKeyCallback"]
+  V --> MD{"auth.mode"}
   MD -->|any| OK["success<br/>audit auth_ok"]
   MD -->|all| P["PartialSuccessError<br/>next: password only"]
   P --> PW{"bcrypt ok?"}
@@ -412,32 +418,38 @@ flowchart TD
 Unknown users and the "no" branches still run bcrypt against a dummy hash, so response timing doesn't reveal which accounts exist.
 
 ```go
-func (a *auth) publicKey(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-    acc, ok := a.lookup(meta.User(), a.ip)  // account exists AND ip allowed
-    if !ok || !acc.hasKey(key.Marshal()) { return nil, a.fail(meta, "publickey") }
-    if acc.Auth.Mode == "all" {
-        return nil, &ssh.PartialSuccessError{Next: ssh.ServerAuthCallbacks{
-            PasswordCallback: a.passwordFor(acc), // only password allowed next
-        }}
-    }
-    return a.ok(meta, acc, "publickey")
+// Is this key allowed? Called before the client proves it owns the key.
+func (a *authenticator) publicKey(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+    acc := a.account(meta.User())          // account exists AND ip allowed
+    if acc == nil || !hasKey(acc, key.Marshal()) { return nil, errAuth }
+    return &ssh.Permissions{Extensions: {"account", "method": "publickey", "key_fp"}}, nil
 }
 
-func (a *auth) password(meta ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
-    acc, ok := a.lookup(meta.User(), a.ip)
-    hash := dummyHash                       // constant work for unknown users
-    if ok && acc.Auth.Mode == "any" && acc.Auth.PasswordHash != "" { hash = acc.Auth.PasswordHash }
-    err := bcrypt.CompareHashAndPassword([]byte(hash), pw)
-    if !ok || hash == dummyHash || err != nil { return nil, a.fail(meta, "password") }
-    return a.ok(meta, acc, "password")
+// Called once the client proved it owns the key.
+func (a *authenticator) verifiedPublicKey(_, _, perms *ssh.Permissions, _ string) (*ssh.Permissions, error) {
+    acc := a.cfg.Account(perms.Extensions["account"])
+    if acc.Auth.Mode != "all" { return perms, nil }
+    return nil, &ssh.PartialSuccessError{Next: ssh.ServerAuthCallbacks{
+        PasswordCallback: secondStep(acc), // only a password is allowed next
+    }}
+}
+
+func (a *authenticator) password(meta ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
+    acc := a.account(meta.User())
+    usable := acc != nil && acc.Auth.Mode == "any" && acc.Auth.PasswordHash != ""
+    hash := dummyHash                      // same work for unknown users
+    if usable { hash = acc.Auth.PasswordHash }
+    err := bcrypt.CompareHashAndPassword(hash, pw)
+    if !usable || err != nil { return nil, errAuth }
+    return &ssh.Permissions{Extensions: {"account", "method": "password"}}, nil
 }
 ```
 
+- **Verified in v0.1:** in `x/crypto` v0.58, `PublicKeyCallback` may **not** return `PartialSuccessError`. The second step has to be requested from `VerifiedPublicKeyCallback`, which runs only after the client has proven it owns the key. An integration test covers key+password, key only and password only.
 - `hasKey` uses `subtle.ConstantTimeCompare` across all keys (no early exit).
-- `ok()` returns `ssh.Permissions{Extensions: {"account": name}}`. The session reads the account from there.
-- `fail()`: `throttle.Fail(ip)`, audit `auth_failed{method, user}`, metric, returns a generic error.
+- **Throttle and audit count one failure per failed connection, not per attempt.** OpenSSH clients normally offer several keys, and counting each one would block honest users. The failure is detected when `ssh.NewServerConn` returns a `*ssh.ServerAuthError`. `AuthLogCallback` keeps the last username tried (cut to 64 characters) for the audit line.
 - In mode `all`, a password-first attempt is rejected (the password callback for `all` accounts always fails). Clients try publickey first by default.
-- **Spike task:** confirm that x/crypto calls `PublicKeyCallback` for the signature-less "query" and caches the result per key. The callback must have no side effects that double-count (audit only on the final decision, or dedupe by key fingerprint per connection).
+- `max_auth_tries` defaults to 6, the same as OpenSSH, so clients with several keys in their agent can still log in.
 
 ### 4.4 Throttle
 
@@ -671,7 +683,7 @@ func (u *upload) Close() error {
 - **Atomicity:** GCS/S3/Azure only make an object visible on a successful `w.Close()`. An abort or error leaves nothing behind.
 - **Concurrent uploads to the same key:** last successful close wins (documented).
 - **Spool** is created with mode 0600 in a directory with mode 0700. On startup, `up-*` files left over from a crash are deleted.
-- **Spike task:** confirm `TransferError` semantics in the pinned `pkg/sftp` version with an integration test that kills the client mid-upload.
+- **Verified in v0.1:** `pkg/sftp` calls `TransferError` on every handle still open when `Serve` exits, before `Close`. A test cuts the connection mid-upload and checks that nothing reaches the bucket. Any `WriteAt` error (including "too large") also marks the upload as failed, so a later `CLOSE` can't commit a cut-off file.
 
 ### 5.4 Read path (download)
 
@@ -1092,8 +1104,8 @@ CMD ["serve"]
 
 ### 14.2 Compose (dev/test)
 - `sftpgate`: build `.`, ports `2222:2222`, `8080:8080`, mounts `./examples/dev.yaml:/etc/sftpgate/sftpgate.yaml:ro`, `./.dev/keys:/etc/sftpgate/keys:ro`, volume `spool`, `read_only: true`.
-- `minio` + an init container that creates the buckets.
-- `fake-gcs` (`fsouza/fake-gcs-server`), with `STORAGE_EMULATOR_HOST` set for sftpgate.
+- `s3` (`adobe/s3mock`, creates the bucket on start). MinIO no longer publishes the community images used for this.
+- `fake-gcs` (`fsouza/fake-gcs-server`, **`-backend memory`**, because its disk backend drops `dir/` marker objects), with `STORAGE_EMULATOR_HOST` set for sftpgate.
 - `prometheus`, `grafana` (provisioned datasource + `sftpgate.json` dashboard) **[v0.2]**.
 - `git-sync` under the `gitops` profile, writing to a shared `/config` volume **[v0.3]**.
 - `make dev-keys` runs `ssh-keygen -t ed25519` to generate the host key and a test user key into `.dev/` (gitignored).
@@ -1109,7 +1121,7 @@ CMD ["serve"]
 | perms | Matrix: each op × each perm present/absent → allowed/denied. |
 | ip/throttle | CIDR/IPv6/mapped-IPv4 matching. Throttle window/block/expiry with an injected clock. |
 | integration (`mem://`) | auth any/all/key-only/password-only/wrong IP/unknown user. Upload → object + metadata + sha256. Upload over max size → nothing committed. Client killed mid-upload → nothing committed. Overwrite with/without perm. Download ranges. Rename same/cross folder. Mkdir/rmdir. Pattern rejection. Shell/exec rejected. max_sessions. Reload kicks changed account only. Invalid reload keeps old config. |
-| e2e (compose) | OpenSSH `sftp -b` scripts against MinIO and fake-GCS. Metrics endpoint scraped. |
+| e2e (compose) | OpenSSH `sftp -b` scripts against the S3 mock and fake-GCS. Metrics endpoint scraped. |
 | actions [v0.2] | Pipeline with a fake webhook server (`httptest`). Retry/backoff. Restart resumes pending. Failed after max attempts. PGP round-trip. |
 | jobs [v0.3] | Pull/push against an in-process SFTPgate as the "remote". Host-key mismatch refused. |
 
@@ -1122,7 +1134,7 @@ CI: `go vet`, `staticcheck`, `go test -race ./...`, `sftpgate validate examples/
 1. `config` (types, load, validate) + `validate` CLI, with tests
 2. `storage` registry + `vfs` against `mem://`, with resolve/perm tests
 3. `server`: listener, SSH auth, session, wiring `pkg/sftp`, then integration tests
-4. Spikes: `PartialSuccessError` query behaviour, `TransferError` on abort, read ordering
+4. Spikes: `PartialSuccessError` query behaviour, `TransferError` on abort, read ordering (done: see 4.3 and 5.3; reads are served by 8 workers and may arrive out of order, so the download reader is locked and reopens on a jump)
 5. `audit`, `metrics`, `web` (health/metrics)
 6. Reload (holder + session kick)
 7. Dockerfile, compose, e2e, example configs, README quickstart

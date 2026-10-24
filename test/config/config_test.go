@@ -132,6 +132,11 @@ func TestOffline(t *testing.T) {
 	if _, err := config.Parse([]byte(src), config.Options{Offline: true}); err != nil {
 		t.Fatalf("offline should pass: %v", err)
 	}
+	keyFromFile := strings.Replace(src, `"`+testPubKey+`"`, `"${file:/does/not/exist.pub}"`, 1)
+	if _, err := config.Parse([]byte(keyFromFile), config.Options{Offline: true}); err != nil {
+		t.Fatalf("offline should accept a public key given as a file reference: %v", err)
+	}
+
 	src = strings.Replace(src, "${env:TEST_PW_HASH}", "$2a$10$abcdefghijklmnopqrstuuMx0Z3Zl5z7ZbYqvJmQmX4o1zS4xU8hG", 1)
 	if _, err := config.Parse([]byte(src), config.Options{Offline: true}); err == nil || !strings.Contains(err.Error(), "inline secret") {
 		t.Fatalf("offline must reject inline secrets, got %v", err)

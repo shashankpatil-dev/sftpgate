@@ -46,7 +46,7 @@ Every account, key, IP rule, folder and permission is declared in git and review
 4. **Post-upload processing (v0.2):** decrypt a PGP file, copy it to a second bucket under a dated prefix, and notify a webhook.
 5. **Scheduled pull (v0.3):** every day at 06:00 IST, fetch statements from the bank's own SFTP server into our bucket.
 6. **Audit:** answer "show every access to `recon-raw/razorpay/2026-10-01.csv`" from logs.
-7. **Test before prod:** run the same image and config locally against MinIO/fake-GCS with `docker compose up`.
+7. **Test before prod:** run the same image and config locally against an S3 mock and a GCS emulator with `make up`.
 
 ## 6. Functional requirements
 

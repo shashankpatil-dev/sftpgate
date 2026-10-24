@@ -149,6 +149,9 @@ func (c *checker) auth(p string, a *Account) {
 
 	for i, k := range au.PublicKeys {
 		kp := fmt.Sprintf("%s.public_keys[%d]", p, i)
+		if c.unresolved(kp) {
+			continue
+		}
 		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(k))
 		if err != nil {
 			c.fail(kp, "invalid public key: %v", err)

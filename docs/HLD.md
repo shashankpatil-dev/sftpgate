@@ -278,7 +278,7 @@ sequenceDiagram
 flowchart TB
   subgraph Compose["docker compose"]
     GW["sftpgate<br/>:2222 SFTP, :8080 HTTP"]
-    MINIO[("minio<br/>S3-compatible")]
+    S3M[("s3mock<br/>S3-compatible")]
     FGCS[("fake-gcs<br/>GCS emulator")]
     PROM["prometheus - v0.2"]
     GRAF["grafana + dashboard - v0.2"]
@@ -291,7 +291,7 @@ flowchart TB
   GS --> VC --> GW
   VK --> GW
   GW <--> VS
-  GW --> MINIO
+  GW --> S3M
   GW --> FGCS
   PROM -->|"scrape /metrics"| GW
   GRAF --> PROM
@@ -419,7 +419,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   U["Unit<br/>config, resolve, perms,<br/>IP, throttle"] --> I["Integration<br/>in-process server +<br/>real sftp client + mem://"]
-  I --> E["E2E<br/>compose: MinIO, fake-GCS,<br/>OpenSSH sftp -b"]
+  I --> E["E2E<br/>compose: S3 mock, fake-GCS,<br/>OpenSSH sftp -b"]
   E --> M["Compatibility<br/>WinSCP, FileZilla,<br/>Paramiko, JSch"]
   M --> LD["Load<br/>200 sessions,<br/>large files"]
 ```
@@ -428,7 +428,7 @@ flowchart LR
 |---|---|---|
 | Unit | Config validation, path resolution, permissions, IP matching, throttle, templates | `go test`, table-driven. |
 | Integration | Full server in-process over loopback, with a real `pkg/sftp` client against `mem://` blob: auth modes, perms, upload/download/rename/list/limits, reload behaviour | `go test`, no Docker needed. |
-| E2E | Compose stack with MinIO + fake-GCS. OpenSSH `sftp -b` batch scripts | `make e2e` in CI. |
+| E2E | Compose stack with an S3 mock + fake-GCS. OpenSSH `sftp -b` batch scripts | `make e2e` in CI. |
 | Compatibility | WinSCP, FileZilla, Paramiko, JSch, Cyberduck | Manual checklist per release. |
 | Load | 200 concurrent sessions, large files | Simple Go load script, run before each release. |
 
