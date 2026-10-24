@@ -34,6 +34,22 @@ type Handler struct {
 	Buckets   *storage.Registry
 	SessionID string
 	IP        string
+
+	// AfterUpload is called for every file saved into a folder that has
+	// on_upload actions. It may be nil.
+	AfterUpload func(Uploaded) error
+}
+
+// Uploaded describes a file that was just saved to a bucket.
+type Uploaded struct {
+	Account  string
+	Folder   string
+	Storage  string
+	Key      string
+	Filename string
+	Size     int64
+	SHA256   string
+	Time     time.Time
 }
 
 // Handlers returns the handler wired up the way pkg/sftp expects.

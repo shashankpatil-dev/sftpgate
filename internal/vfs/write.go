@@ -2,9 +2,6 @@ package vfs
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,12 +11,12 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"gocloud.dev/blob"
 	"golang.org/x/sys/unix"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
+	"github.com/shashankpatil-dev/sftpgate/internal/storage"
 )
 
 // errSpoolFull is returned when the spool disk is almost full.
@@ -134,51 +131,46 @@ func (u *upload) Close() error {
 		return u.failed
 	}
 
-	// Pass 1 reads the local file to get its checksums. Pass 2 sends it.
-	// The bucket checks the MD5, so a corrupted transfer is never saved.
-	sha, md5sum, err := checksums(io.NewSectionReader(u.file, 0, u.size))
+	sha, err := storage.PutFile(context.Background(), u.t.bucket, u.t.key, u.file, u.size, map[string]string{
+		"sftpgate-account": u.h.Account.Name,
+		"sftpgate-ip":      u.h.IP,
+		"sftpgate-session": u.h.SessionID,
+	})
+	e.SHA256 = sha
+	e.DurationMS = time.Since(u.start).Milliseconds()
 	if err != nil {
 		return u.h.finish(e, u.t, err)
 	}
-	e.SHA256 = hex.EncodeToString(sha)
 
-	err = u.send(md5sum, hex.EncodeToString(sha))
-	e.DurationMS = time.Since(u.start).Milliseconds()
-	if err == nil {
-		folder := u.t.folder.Path
-		metrics.TransferBytes.WithLabelValues(u.h.Account.Name, folder, "in").Add(float64(u.size))
-		metrics.TransferDuration.WithLabelValues("in").Observe(time.Since(u.start).Seconds())
-	}
-	return u.h.finish(e, u.t, err)
+	folder := u.t.folder.Path
+	metrics.TransferBytes.WithLabelValues(u.h.Account.Name, folder, "in").Add(float64(u.size))
+	metrics.TransferDuration.WithLabelValues("in").Observe(time.Since(u.start).Seconds())
+	u.h.record(e, u.t, nil)
+	u.afterUpload(sha)
+	return nil
 }
 
-// send streams the spool file to the bucket. The object only appears in the
-// bucket if everything worked.
-func (u *upload) send(md5sum []byte, sha string) error {
-	// Cancelling the context before Close tells the bucket to throw the
-	// write away instead of saving it.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	w, err := u.t.bucket.NewWriter(ctx, u.t.key, &blob.WriterOptions{
-		ContentMD5: md5sum,
-		Metadata: map[string]string{
-			"sftpgate-account": u.h.Account.Name,
-			"sftpgate-ip":      u.h.IP,
-			"sftpgate-session": u.h.SessionID,
-			"sftpgate-sha256":  sha,
-		},
+// afterUpload hands the saved file to the post-upload actions, if the folder
+// has any. The file is already safe in the bucket, so a failure here is
+// logged and counted but not reported to the client.
+func (u *upload) afterUpload(sha string) {
+	if len(u.t.folder.OnUpload) == 0 || u.h.AfterUpload == nil {
+		return
+	}
+	err := u.h.AfterUpload(Uploaded{
+		Account:  u.h.Account.Name,
+		Folder:   u.t.folder.Path,
+		Storage:  u.t.folder.Storage,
+		Key:      u.t.key,
+		Filename: path.Base(u.t.rel),
+		Size:     u.size,
+		SHA256:   sha,
+		Time:     time.Now(),
 	})
 	if err != nil {
-		return err
+		slog.Error("could not queue post-upload actions", "key", u.t.key, "err", err)
+		metrics.Actions.WithLabelValues("queue", "failed").Inc()
 	}
-
-	if _, err := io.Copy(w, io.NewSectionReader(u.file, 0, u.size)); err != nil {
-		cancel()
-		_ = w.Close()
-		return err
-	}
-	return w.Close()
 }
 
 // discardSpool closes and deletes the spool file. A file left behind would
@@ -188,14 +180,6 @@ func (u *upload) discardSpool() {
 	if err := os.Remove(u.file.Name()); err != nil {
 		slog.Warn("could not remove spool file", "file", u.file.Name(), "err", err)
 	}
-}
-
-func checksums(r io.Reader) (sha, md5sum []byte, err error) {
-	s, m := sha256.New(), md5.New()
-	if _, err := io.Copy(io.MultiWriter(s, m), r); err != nil {
-		return nil, nil, err
-	}
-	return s.Sum(nil), m.Sum(nil), nil
 }
 
 // FreeSpace returns the free bytes on the disk that holds dir, and

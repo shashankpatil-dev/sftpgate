@@ -36,6 +36,7 @@ type Event struct {
 	ToKey      string
 	SHA256     string
 	Config     string
+	Job        string
 	Size       int64
 	DurationMS int64
 }
@@ -75,6 +76,7 @@ func Emit(e Event) {
 	add("to_key", e.ToKey)
 	add("sha256", e.SHA256)
 	add("config", e.Config)
+	add("job", e.Job)
 	if e.Size > 0 {
 		attrs = append(attrs, slog.Int64("size", e.Size))
 	}

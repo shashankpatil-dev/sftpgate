@@ -12,6 +12,8 @@ import (
 	"encoding/pem"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/shashankpatil-dev/sftpgate/internal/actions"
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/server"
@@ -102,6 +105,12 @@ func newHarness(t *testing.T, edit func(string) string) *harness {
 	h.load(src)
 
 	h.srv = server.New(h.cfg.Load, h.buckets)
+	runner, err := actions.NewRunner(filepath.Join(h.dir, "queue"), h.dir, h.cfg.Load, h.buckets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.AfterUpload = runner.Add
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -114,9 +123,15 @@ func newHarness(t *testing.T, edit func(string) string) *harness {
 		_ = h.srv.Serve(ctx, ln, time.Second)
 		close(done)
 	}()
+	runnerDone := make(chan struct{})
+	go func() {
+		runner.Run(ctx)
+		close(runnerDone)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		<-done
+		<-runnerDone
 	})
 	return h
 }
@@ -368,6 +383,39 @@ func TestAuditRecordsUpload(t *testing.T) {
 	}
 	if ev["account"] != "keyuser" || ev["result"] != "ok" || ev["key"] != "key/hello.txt" || ev["sha256"] == nil {
 		t.Fatalf("upload audit = %v", ev)
+	}
+}
+
+// An upload over SFTP into a folder with on_upload steps must reach the
+// webhook, through the server, the queue and the background workers.
+func TestUploadTriggersActions(t *testing.T) {
+	got := make(chan actions.WebhookPayload, 1)
+	hook := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var p actions.WebhookPayload
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		got <- p
+	}))
+	defer hook.Close()
+
+	h := newHarness(t, func(s string) string {
+		return strings.Replace(s,
+			"prefix: key, perms: [list, upload, download] }",
+			"prefix: key, perms: [list, upload, download], on_upload: [{ webhook: { url: \""+hook.URL+"\" } }] }", 1)
+	})
+	c, err := h.dial("keyuser", h.withKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	sftpRoundTrip(t, c)
+
+	select {
+	case p := <-got:
+		if p.Account != "keyuser" || p.Key != "key/hello.txt" || p.Size != 5 {
+			t.Fatalf("webhook payload = %+v", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("webhook was not called")
 	}
 }
 

@@ -68,6 +68,16 @@ var (
 		Help: "Config reloads, by result.",
 	}, []string{"result"})
 
+	Actions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sftpgate_actions_total",
+		Help: "Post-upload action runs. step=queue counts files that could not be queued.",
+	}, []string{"step", "result"})
+
+	ActionsQueue = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "sftpgate_actions_queue_depth",
+		Help: "Post-upload jobs waiting to run (pending) or given up on (failed).",
+	}, []string{"state"})
+
 	ConfigInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "sftpgate_config_info",
 		Help: "Always 1. The labels tell which config is running.",
@@ -91,6 +101,10 @@ func Prepare(cfg *config.Config) {
 		ConfigReloads.WithLabelValues(result)
 	}
 	Auth.WithLabelValues(UnknownAccount, "any", "failed")
+	for _, step := range []string{"queue", "pgp_decrypt", "pgp_encrypt", "copy", "webhook", "job"} {
+		Actions.WithLabelValues(step, "ok")
+		Actions.WithLabelValues(step, "failed")
+	}
 
 	for name := range cfg.Storages {
 		StorageErrors.WithLabelValues(name)

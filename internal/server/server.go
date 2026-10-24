@@ -39,6 +39,10 @@ type Server struct {
 	Buckets  *storage.Registry
 	Throttle *Throttle
 
+	// AfterUpload receives every file saved into a folder with on_upload
+	// steps. It may be nil.
+	AfterUpload func(vfs.Uploaded) error
+
 	mu       sync.Mutex
 	sessions map[string]*session
 	wg       sync.WaitGroup
@@ -180,11 +184,12 @@ func (s *Server) handle(c net.Conn) {
 
 	go ssh.DiscardRequests(reqs)
 	s.serveChannels(chans, &vfs.Handler{
-		Config:    cfg,
-		Account:   sess.account,
-		Buckets:   s.Buckets,
-		SessionID: sess.id,
-		IP:        ip.String(),
+		Config:      cfg,
+		Account:     sess.account,
+		Buckets:     s.Buckets,
+		SessionID:   sess.id,
+		IP:          ip.String(),
+		AfterUpload: s.AfterUpload,
 	})
 
 	ev.Event, ev.Method, ev.KeyFP = "session_end", "", ""

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shashankpatil-dev/sftpgate/internal/actions"
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
@@ -53,6 +54,12 @@ func serve(path string) error {
 	setConfigInfo(cfg)
 	metrics.Prepare(cfg)
 
+	runner, err := actions.NewRunner(filepath.Join(cfg.Server.SpoolDir, "queue"), cfg.Server.SpoolDir, r.current.Load, buckets)
+	if err != nil {
+		return err
+	}
+	srv.AfterUpload = runner.Add
+
 	ln, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
 		return err
@@ -69,6 +76,7 @@ func serve(path string) error {
 	}()
 	go r.run(ctx, cfg.Server.ReloadInterval)
 	go watchSpool(ctx, cfg.Server.SpoolDir)
+	go runner.Run(ctx)
 
 	slog.Info("sftpgate started", "version", version, "sftp", cfg.Server.Listen, "http", cfg.HTTP.Listen, "config", cfg.Hash)
 	err = srv.Serve(ctx, ln, shutdownGrace)
