@@ -86,7 +86,7 @@ server:
   allow_ips: []                              # global CIDR/IP allowlist; empty = allow any
   banner: ""                                 # optional pre-auth banner
   idle_timeout: 15m                          # close idle sessions; default 15m
-  max_auth_tries: 3                          # per connection; default 3
+  max_auth_tries: 6                          # per connection; default 6 (same as OpenSSH)
   legacy_algorithms: false                   # see PRD open question 4
   spool_dir: /var/lib/sftpgate/spool         # default
   min_spool_free: 1GiB                       # refuse uploads below this; default 1GiB

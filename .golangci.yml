@@ -9,6 +9,22 @@ linters:
     - revive
     - unconvert
 
+  settings:
+    errcheck:
+      # Closing a network connection at the end of its life can't lose data,
+      # so these errors are safe to ignore.
+      exclude-functions:
+        - (net.Conn).Close
+        - (golang.org/x/crypto/ssh.Conn).Close
+        - (golang.org/x/crypto/ssh.Channel).Close
+
+  exclusions:
+    rules:
+      # Tests close clients in defers all the time; failures there don't matter.
+      - path: ^test/
+        linters:
+          - errcheck
+
 formatters:
   enable:
     - gofmt

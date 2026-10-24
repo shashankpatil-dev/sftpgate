@@ -151,7 +151,7 @@ func applyDefaults(c *Config) {
 	setDefault(&s.Listen, ":2222")
 	setDefault(&s.SpoolDir, "/var/lib/sftpgate/spool")
 	setDefault(&s.IdleTimeout, 15*time.Minute)
-	setDefault(&s.MaxAuthTries, 3)
+	setDefault(&s.MaxAuthTries, 6)
 	setDefault(&s.MinSpoolFree, 1<<30)
 	setDefault(&s.ReloadInterval, 10*time.Second)
 	setDefault(&s.Throttle.MaxFailures, 5)
