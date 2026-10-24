@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -39,6 +40,7 @@ type harness struct {
 	srv     *server.Server
 	buckets *storage.Registry
 	userKey ssh.Signer
+	rsaKey  ssh.Signer
 	dir     string
 	audit   *syncBuffer
 }
@@ -60,7 +62,7 @@ storages:
 accounts:
   - name: keyuser
     max_sessions: 1
-    auth: { public_keys: ["USERKEY"] }
+    auth: { public_keys: ["USERKEY", "RSAKEY"] }
     folders: [{ path: /data, storage: raw, prefix: key, perms: [list, upload, download] }]
   - name: pwuser
     auth: { password_hash: "${env:PW_HASH}" }
@@ -81,6 +83,11 @@ func newHarness(t *testing.T, edit func(string) string) *harness {
 
 	writeKey(t, filepath.Join(h.dir, "host_key"))
 	h.userKey = writeKey(t, filepath.Join(h.dir, "user_key"))
+	rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.rsaKey, _ = ssh.NewSignerFromKey(rsaPriv)
 	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost+6)
 	t.Setenv("PW_HASH", string(hash))
 
@@ -88,6 +95,7 @@ func newHarness(t *testing.T, edit func(string) string) *harness {
 	src = strings.ReplaceAll(src, "HOSTKEY", filepath.Join(h.dir, "host_key"))
 	src = strings.ReplaceAll(src, "SPOOL", h.dir)
 	src = strings.ReplaceAll(src, "USERKEY", strings.TrimSpace(string(ssh.MarshalAuthorizedKey(h.userKey.PublicKey()))))
+	src = strings.ReplaceAll(src, "RSAKEY", strings.TrimSpace(string(ssh.MarshalAuthorizedKey(h.rsaKey.PublicKey()))))
 	if edit != nil {
 		src = edit(src)
 	}
@@ -131,12 +139,16 @@ func (h *harness) load(src string) *config.Config {
 }
 
 func (h *harness) dial(user string, methods ...ssh.AuthMethod) (*ssh.Client, error) {
-	return ssh.Dial("tcp", h.addr, &ssh.ClientConfig{
+	return ssh.Dial("tcp", h.addr, h.clientConfig(user, methods...))
+}
+
+func (h *harness) clientConfig(user string, methods ...ssh.AuthMethod) *ssh.ClientConfig {
+	return &ssh.ClientConfig{
 		User:            user,
 		Auth:            methods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         5 * time.Second,
-	})
+	}
 }
 
 func (h *harness) withKey() ssh.AuthMethod      { return ssh.PublicKeys(h.userKey) }
@@ -205,6 +217,50 @@ func TestLoginModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Old clients that only speak SHA-1 are refused on purpose. They must upgrade.
+func TestSHA1IsRefused(t *testing.T) {
+	h := newHarness(t, nil)
+
+	rsaSHA1, err := ssh.NewSignerWithAlgorithms(h.rsaKey.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSA})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name  string
+		setup func(*ssh.ClientConfig)
+	}{
+		{"sha1 key exchange", func(c *ssh.ClientConfig) {
+			c.KeyExchanges = []string{ssh.InsecureKeyExchangeDH14SHA1}
+		}},
+		{"sha1 mac", func(c *ssh.ClientConfig) {
+			// MACs are only used with non-AEAD ciphers, so pick one.
+			c.Ciphers = []string{"aes128-ctr"}
+			c.MACs = []string{ssh.HMACSHA1}
+		}},
+		{"ssh-rsa sha1 signature", func(c *ssh.ClientConfig) {
+			c.Auth = []ssh.AuthMethod{ssh.PublicKeys(rsaSHA1)}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := h.clientConfig("keyuser", h.withKey())
+			tc.setup(cfg)
+			if c, err := ssh.Dial("tcp", h.addr, cfg); err == nil {
+				_ = c.Close()
+				t.Fatal("a SHA-1 only client must be refused")
+			}
+		})
+	}
+
+	// The same RSA key works fine with SHA-2 signatures.
+	c, err := h.dial("keyuser", ssh.PublicKeys(h.rsaKey))
+	if err != nil {
+		t.Fatalf("RSA key with SHA-2 must work: %v", err)
+	}
+	_ = c.Close()
 }
 
 func TestShellAndExecAreRefused(t *testing.T) {

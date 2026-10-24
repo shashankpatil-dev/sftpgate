@@ -389,8 +389,10 @@ cfg := &ssh.ServerConfig{
     ServerVersion:             "SSH-2.0-SFTPgate",
 }
 for _, k := range hostKeys { cfg.AddHostKey(k) }
-// Always the x/crypto defaults: no SHA-1 key exchange, MACs or ssh-rsa signatures.
-// There is no switch to turn them on (PRD open question 4: decided no).
+// SHA-1 is never offered, and there is no switch to turn it on (PRD open question 4).
+// The x/crypto defaults still include diffie-hellman-group14-sha1, hmac-sha1 and
+// ssh-rsa, so KeyExchanges, MACs and PublicKeyAuthAlgorithms are set explicitly,
+// and RSA host keys are wrapped to sign with rsa-sha2-256/512 only.
 ```
 
 ### 4.3 Authentication

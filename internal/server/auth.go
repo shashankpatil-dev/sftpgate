@@ -21,6 +21,37 @@ const (
 
 var errAuth = errors.New("authentication failed")
 
+// Only modern algorithms are offered. SHA-1 is never allowed: clients that
+// still need it must upgrade (decided in PRD open question 4). The library
+// defaults still include some SHA-1 options, so the lists are set here.
+var (
+	keyExchanges = []string{
+		ssh.KeyExchangeMLKEM768X25519,
+		ssh.KeyExchangeCurve25519,
+		ssh.KeyExchangeECDHP256,
+		ssh.KeyExchangeECDHP384,
+		ssh.KeyExchangeECDHP521,
+		ssh.KeyExchangeDH14SHA256,
+	}
+	macs = []string{
+		ssh.HMACSHA256ETM,
+		ssh.HMACSHA512ETM,
+		ssh.HMACSHA256,
+		ssh.HMACSHA512,
+	}
+	userKeyAlgorithms = []string{
+		ssh.KeyAlgoED25519,
+		ssh.KeyAlgoSKED25519,
+		ssh.KeyAlgoSKECDSA256,
+		ssh.KeyAlgoECDSA256,
+		ssh.KeyAlgoECDSA384,
+		ssh.KeyAlgoECDSA521,
+		ssh.KeyAlgoRSASHA256,
+		ssh.KeyAlgoRSASHA512,
+	}
+	rsaHostKeyAlgorithms = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+)
+
 // dummyHash is compared against when the user doesn't exist, so a wrong
 // username takes as long as a wrong password and can't be told apart.
 var dummyHash = func() []byte {
@@ -51,6 +82,8 @@ func (a *authenticator) account(user string) *config.Account {
 // sshConfig builds the SSH server settings for this connection.
 func (a *authenticator) sshConfig() *ssh.ServerConfig {
 	sc := &ssh.ServerConfig{
+		Config:                    ssh.Config{KeyExchanges: keyExchanges, MACs: macs},
+		PublicKeyAuthAlgorithms:   userKeyAlgorithms,
 		MaxAuthTries:              a.cfg.Server.MaxAuthTries,
 		PublicKeyCallback:         a.publicKey,
 		VerifiedPublicKeyCallback: a.verifiedPublicKey,
@@ -62,9 +95,23 @@ func (a *authenticator) sshConfig() *ssh.ServerConfig {
 		sc.BannerCallback = func(ssh.ConnMetadata) string { return banner + "\n" }
 	}
 	for _, k := range a.cfg.HostKeys {
-		sc.AddHostKey(k)
+		sc.AddHostKey(withoutSHA1(k))
 	}
 	return sc
+}
+
+// withoutSHA1 makes an RSA host key sign only with SHA-2. Other key types
+// never use SHA-1, so they are returned as they are.
+func withoutSHA1(k ssh.Signer) ssh.Signer {
+	as, ok := k.(ssh.AlgorithmSigner)
+	if !ok || k.PublicKey().Type() != ssh.KeyAlgoRSA {
+		return k
+	}
+	signer, err := ssh.NewSignerWithAlgorithms(as, rsaHostKeyAlgorithms)
+	if err != nil {
+		return k
+	}
+	return signer
 }
 
 // logAttempt remembers the username of each login attempt. The username
