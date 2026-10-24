@@ -20,6 +20,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/server"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 	"github.com/shashankpatil-dev/sftpgate/internal/web"
 )
@@ -41,6 +42,16 @@ func serve(path string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+
+	stopTracing, err := tracing.Init(ctx, version)
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = stopTracing(flushCtx)
+	}()
 
 	buckets := storage.NewRegistry()
 	if err := buckets.Prepare(ctx, cfg); err != nil {

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 )
 
 // Handler serves the SFTP requests of one session.
@@ -38,6 +41,10 @@ type Handler struct {
 	// AfterUpload is called for every file saved into a folder that has
 	// on_upload actions. It may be nil.
 	AfterUpload func(Uploaded) error
+
+	// Ctx carries the session's trace span. File operations become child
+	// spans of it. It may be nil when tracing isn't used.
+	Ctx context.Context
 }
 
 // Uploaded describes a file that was just saved to a bucket.
@@ -50,6 +57,9 @@ type Uploaded struct {
 	Size     int64
 	SHA256   string
 	Time     time.Time
+
+	// TraceParent links the post-upload actions to the upload's trace.
+	TraceParent string
 }
 
 // Handlers returns the handler wired up the way pkg/sftp expects.
@@ -135,6 +145,7 @@ func (h *Handler) event(name string, t *target) audit.Event {
 		Account: h.Account.Name,
 		IP:      h.IP,
 		Config:  h.Config.Hash,
+		TraceID: tracing.TraceID(h.ctx()),
 	}
 	if t != nil {
 		e.Path = t.path
@@ -144,6 +155,23 @@ func (h *Handler) event(name string, t *target) audit.Event {
 		}
 	}
 	return e
+}
+
+// ctx returns the session context, or an empty one.
+func (h *Handler) ctx() context.Context {
+	if h.Ctx == nil {
+		return context.Background()
+	}
+	return h.Ctx
+}
+
+// startSpan starts a span for one file operation, as a child of the session.
+func (h *Handler) startSpan(name string, t *target) (context.Context, trace.Span) {
+	ctx, span := tracing.Tracer.Start(h.ctx(), name)
+	if t != nil && t.folder != nil {
+		span.SetAttributes(attribute.String("sftpgate.folder", t.folder.Path))
+	}
+	return ctx, span
 }
 
 // finish records the result of an operation and turns the error into one

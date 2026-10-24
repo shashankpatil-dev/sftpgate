@@ -11,12 +11,15 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 )
 
 // errSpoolFull is returned when the spool disk is almost full.
@@ -64,7 +67,8 @@ func (h *Handler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 		return nil, h.finish(e, t, err)
 	}
 
-	return &upload{h: h, t: t, event: e, file: f, max: int64(t.folder.MaxFileSize), start: time.Now()}, nil
+	ctx, span := h.startSpan("sftp.upload", t)
+	return &upload{h: h, t: t, event: e, file: f, max: int64(t.folder.MaxFileSize), start: time.Now(), ctx: ctx, span: span}, nil
 }
 
 // upload is one file being received from the client.
@@ -73,6 +77,10 @@ type upload struct {
 	t     *target
 	event audit.Event
 	start time.Time
+
+	// ctx and span trace this upload.
+	ctx  context.Context
+	span trace.Span
 
 	// max is the size limit in bytes; 0 means no limit.
 	max int64
@@ -124,18 +132,24 @@ func (u *upload) Close() error {
 
 	e := u.event
 	e.Size = u.size
+	u.span.SetAttributes(attribute.Int64("sftpgate.size", u.size))
+
 	// The client caused this (dropped connection, file too big), not the
 	// storage, so the error goes back as it is.
 	if u.failed != nil {
 		u.h.record(e, u.t, u.failed)
+		tracing.End(u.span, u.failed)
 		return u.failed
 	}
 
+	_, write := tracing.Tracer.Start(u.ctx, "storage.write")
 	sha, err := storage.PutFile(context.Background(), u.t.bucket, u.t.key, u.file, u.size, map[string]string{
 		"sftpgate-account": u.h.Account.Name,
 		"sftpgate-ip":      u.h.IP,
 		"sftpgate-session": u.h.SessionID,
 	})
+	tracing.End(write, err)
+	defer func() { tracing.End(u.span, err) }()
 	e.SHA256 = sha
 	e.DurationMS = time.Since(u.start).Milliseconds()
 	if err != nil {
@@ -166,6 +180,8 @@ func (u *upload) afterUpload(sha string) {
 		Size:     u.size,
 		SHA256:   sha,
 		Time:     time.Now(),
+
+		TraceParent: tracing.Inject(u.ctx),
 	})
 	if err != nil {
 		slog.Error("could not queue post-upload actions", "key", u.t.key, "err", err)

@@ -18,12 +18,15 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 )
 
@@ -178,6 +181,15 @@ func (s *Server) handle(c net.Conn) {
 	}
 	defer s.removeSession(sess)
 
+	ctx, span := tracing.Tracer.Start(context.Background(), "sftp.session", trace.WithAttributes(
+		attribute.String("sftpgate.account", sess.account.Name),
+		attribute.String("sftpgate.session", sess.id),
+		attribute.String("sftpgate.auth_method", ev.Method),
+		attribute.String("client.address", ip.String()),
+	))
+	defer span.End()
+	ev.TraceID = tracing.TraceID(ctx)
+
 	ev.Event, ev.Result = "session_start", audit.OK
 	audit.Emit(ev)
 	start := time.Now()
@@ -190,6 +202,7 @@ func (s *Server) handle(c net.Conn) {
 		SessionID:   sess.id,
 		IP:          ip.String(),
 		AfterUpload: s.AfterUpload,
+		Ctx:         ctx,
 	})
 
 	ev.Event, ev.Method, ev.KeyFP = "session_end", "", ""

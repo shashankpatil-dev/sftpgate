@@ -17,11 +17,14 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 )
 
 // current is the file as it moves through the steps. Each step can replace
@@ -62,7 +65,9 @@ func (r *Runner) runSteps(ctx context.Context, job Job) error {
 		return err
 	}
 	for _, step := range folder.OnUpload {
-		err := r.runStep(ctx, step, cur)
+		stepCtx, span := tracing.Tracer.Start(ctx, "action."+step.Name())
+		err := r.runStep(stepCtx, step, cur)
+		tracing.End(span, err)
 		result := audit.OK
 		if err != nil {
 			result = audit.Failed
@@ -269,6 +274,8 @@ func (r *Runner) webhook(ctx context.Context, cur *current, w *config.Webhook) e
 	if w.Secret != "" {
 		req.Header.Set("X-Sftpgate-Signature", "sha256="+Sign(w.Secret, body))
 	}
+	// Lets the receiver continue this trace, when tracing is on.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	resp, err := r.Client.Do(req)
 	if err != nil {

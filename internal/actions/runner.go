@@ -23,10 +23,14 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 )
 
@@ -47,6 +51,10 @@ type Job struct {
 	Attempt   int       `json:"attempt"`
 	NextAt    time.Time `json:"next_at"`
 	LastError string    `json:"last_error,omitempty"`
+
+	// TraceParent points at the upload's trace, so the job's own trace can
+	// link back to it.
+	TraceParent string `json:"traceparent,omitempty"`
 }
 
 // Runner owns the queue folder and the workers that process it.
@@ -105,6 +113,8 @@ func (r *Runner) Add(u vfs.Uploaded) error {
 		SHA256:   u.SHA256,
 		Uploaded: u.Time,
 		NextAt:   u.Time,
+
+		TraceParent: u.TraceParent,
 	}
 	if err := r.save(job, r.jobPath(job.ID)); err != nil {
 		return err
@@ -221,13 +231,27 @@ func (r *Runner) release(id string) {
 func (r *Runner) process(ctx context.Context, job Job) {
 	defer r.release(job.ID)
 
+	// Each attempt gets its own trace, linked to the upload's trace. It may
+	// run long after the upload, even after a restart.
+	ctx, span := tracing.Tracer.Start(ctx, "action.run",
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.Link{SpanContext: tracing.Extract(job.TraceParent)}),
+		trace.WithAttributes(
+			attribute.String("sftpgate.job", job.ID),
+			attribute.String("sftpgate.account", job.Account),
+			attribute.String("sftpgate.folder", job.Folder),
+			attribute.Int("sftpgate.attempt", job.Attempt+1),
+		))
 	err := r.runSteps(ctx, job)
+	tracing.End(span, err)
+
 	ev := audit.Event{
 		Event:   "action",
 		Account: job.Account,
 		Storage: job.Storage,
 		Key:     job.Key,
 		Job:     job.ID,
+		TraceID: tracing.TraceID(ctx),
 		Result:  audit.OK,
 	}
 

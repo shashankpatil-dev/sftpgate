@@ -9,27 +9,35 @@ import (
 	"gocloud.dev/gcerrors"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 )
 
 // Filecmd handles the requests that change files without moving data:
 // remove, rename, mkdir, rmdir and setstat.
 func (h *Handler) Filecmd(r *sftp.Request) error {
+	var run func(*sftp.Request) error
+	var op string
 	switch r.Method {
 	case "Setstat":
 		// Clients like WinSCP set the file time after an upload. Buckets have
 		// no such setting, so we say yes and do nothing.
 		return nil
 	case "Remove":
-		return h.remove(r)
+		run, op = h.remove, "delete"
 	case "Mkdir":
-		return h.mkdir(r)
+		run, op = h.mkdir, "mkdir"
 	case "Rmdir":
-		return h.rmdir(r)
+		run, op = h.rmdir, "rmdir"
 	case "Rename":
-		return h.rename(r)
+		run, op = h.rename, "rename"
 	default:
 		return sftp.ErrSSHFxOpUnsupported
 	}
+
+	_, span := h.startSpan("sftp."+op, nil)
+	err := run(r)
+	tracing.End(span, err)
+	return err
 }
 
 func (h *Handler) remove(r *sftp.Request) error {

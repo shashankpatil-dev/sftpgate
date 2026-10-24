@@ -8,11 +8,14 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gocloud.dev/blob"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 )
 
 // Fileread starts a download. The file is streamed straight from the bucket.
@@ -31,7 +34,8 @@ func (h *Handler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 		return nil, h.finish(e, t, err)
 	}
 
-	return &download{h: h, t: t, event: e, size: attrs.Size, start: time.Now()}, nil
+	_, span := h.startSpan("sftp.download", t)
+	return &download{h: h, t: t, event: e, size: attrs.Size, start: time.Now(), span: span}, nil
 }
 
 // download is one file being sent to the client.
@@ -45,6 +49,7 @@ type download struct {
 	event audit.Event
 	size  int64
 	start time.Time
+	span  trace.Span
 
 	mu     sync.Mutex
 	reader *blob.Reader
@@ -114,5 +119,7 @@ func (d *download) Close() error {
 
 	// Storage errors were already logged in ReadAt, so only record the result.
 	d.h.record(e, d.t, d.failed)
+	d.span.SetAttributes(attribute.Int64("sftpgate.size", d.sent))
+	tracing.End(d.span, d.failed)
 	return nil
 }
