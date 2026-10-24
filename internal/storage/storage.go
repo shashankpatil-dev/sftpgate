@@ -4,6 +4,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"gocloud.dev/blob"
@@ -46,13 +47,35 @@ func (r *Registry) Prepare(ctx context.Context, cfg *config.Config) error {
 		if r.open[url] != nil {
 			continue
 		}
-		b, err := blob.OpenBucket(ctx, url)
+		b, err := blob.OpenBucket(ctx, withFileDefaults(url))
 		if err != nil {
 			return fmt.Errorf("storage %s: %w", name, err)
 		}
 		r.open[url] = b
 	}
 	return nil
+}
+
+// withFileDefaults adds two settings to file:// URLs that are needed when
+// the folder is a mounted volume, as in Kubernetes:
+//   - create_dir: create the folder if it doesn't exist yet (a new volume is empty)
+//   - no_tmp_dir: write temp files next to the target; renaming one from /tmp
+//     onto another volume fails with "invalid cross-device link"
+func withFileDefaults(url string) string {
+	if !strings.HasPrefix(url, "file://") {
+		return url
+	}
+	for _, opt := range []string{"create_dir", "no_tmp_dir"} {
+		if strings.Contains(url, opt+"=") {
+			continue
+		}
+		sep := "?"
+		if strings.Contains(url, "?") {
+			sep = "&"
+		}
+		url += sep + opt + "=true"
+	}
+	return url
 }
 
 // Bucket returns the open bucket for a storage name in cfg.

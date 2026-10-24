@@ -183,3 +183,23 @@ func setDefault[T comparable](v *T, d T) {
 		*v = d
 	}
 }
+
+// fileRefRe matches ${file:/path} references.
+var fileRefRe = regexp.MustCompile(`\$\{file:([^}]*)\}`)
+
+// SourceHash returns a hash of the config file together with every file it
+// references with ${file:...}. It changes when either one changes, so a
+// rotated Kubernetes Secret is picked up without a restart.
+func SourceHash(raw []byte) string {
+	h := sha256.New()
+	h.Write(raw)
+	for _, m := range fileRefRe.FindAllSubmatch(raw, -1) {
+		h.Write([]byte{0})
+		h.Write(m[1])
+		// A missing file still counts: it shows up as a change once it appears.
+		if b, err := os.ReadFile(string(m[1])); err == nil {
+			h.Write(b)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}

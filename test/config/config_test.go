@@ -318,3 +318,22 @@ func TestRevisionFromGitSyncPath(t *testing.T) {
 		t.Fatalf("SFTPGATE_REVISION must win, got %q", got)
 	}
 }
+
+func TestSourceHashSeesReferencedFiles(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "pw_hash")
+	if err := os.WriteFile(secret, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("password_hash: ${file:" + secret + "}\n")
+
+	before := config.SourceHash(raw)
+	if config.SourceHash(raw) != before {
+		t.Fatal("the hash must be stable")
+	}
+	if err := os.WriteFile(secret, []byte("rotated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if config.SourceHash(raw) == before {
+		t.Fatal("rotating a referenced file must change the hash")
+	}
+}

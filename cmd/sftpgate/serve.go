@@ -59,7 +59,7 @@ func serve(path string) error {
 		return err
 	}
 
-	r := &reloader{path: path, buckets: buckets}
+	r := &reloader{path: path, buckets: buckets, loaded: config.SourceHash(cfg.Raw)}
 	r.current.Store(cfg)
 	srv := server.New(r.current.Load, buckets)
 	r.server = srv
@@ -158,8 +158,10 @@ type reloader struct {
 	server  *server.Server
 	current atomic.Pointer[config.Config]
 
-	// rejected is the hash of the last file that failed, so a broken file
-	// is reported once instead of on every check.
+	// loaded is the source hash (config plus referenced files) of the
+	// running config, and rejected the one of the last file that failed,
+	// so a broken file is reported once instead of on every check.
+	loaded   string
 	rejected string
 
 	// revision is the git commit of the running config, when known.
@@ -199,8 +201,8 @@ func (r *reloader) reload(ctx context.Context, force bool) {
 		r.failed(old, err)
 		return
 	}
-	hash := config.HashOf(raw)
-	if !force && (hash == old.Hash || hash == r.rejected) {
+	hash := config.SourceHash(raw)
+	if !force && (hash == r.loaded || hash == r.rejected) {
 		return
 	}
 
@@ -215,6 +217,7 @@ func (r *reloader) reload(ctx context.Context, force bool) {
 	}
 
 	r.rejected = ""
+	r.loaded = hash
 	r.current.Store(cfg)
 	r.server.CloseChanged(cfg)
 	r.setConfigInfo(cfg)
