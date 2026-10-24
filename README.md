@@ -99,7 +99,8 @@ transfers:
 ```
 
 - **Pull** skips files already in the bucket. With `delete_after`, the remote
-  file is removed once it is stored.
+  file is removed once it is stored. A skipped file is never deleted: SFTPgate
+  only removes partner files it stored itself in that run.
 - **Push** uploads under a temporary dot-name and renames it when complete, so
   the partner never sees half a file. With `after: keep` it skips files the
   remote already has.

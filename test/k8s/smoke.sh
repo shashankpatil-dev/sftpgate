@@ -6,6 +6,8 @@
 #   test/k8s/smoke.sh            # needs docker, kind, kubectl, helm
 #   KEEP=1 test/k8s/smoke.sh     # leave the cluster running afterwards
 set -euo pipefail
+# Responses are read in full before grep looks at them: "curl | grep -q" can
+# fail under pipefail when grep stops reading early.
 cd "$(dirname "$0")/../.."
 
 CLUSTER=${CLUSTER:-sftpgate-test}
@@ -59,7 +61,7 @@ sftp_run() {
 }
 
 echo "creating the kind cluster..."
-kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 120s
+grep -qx "$CLUSTER" <<<"$(kind get clusters 2>/dev/null)" || kind create cluster --name "$CLUSTER" --wait 120s
 
 echo "building and loading the image..."
 docker build -q -t sftpgate:test . >/dev/null
@@ -94,13 +96,13 @@ echo "checking health, readiness and the UI..."
 forward service/sftpgate-http "$HTTP_PORT:8080"
 curl -fs localhost:$HTTP_PORT/healthz >/dev/null || fail "/healthz"
 curl -fs localhost:$HTTP_PORT/readyz >/dev/null || fail "/readyz"
-curl -fs -u x:kind-smoke-test-token localhost:$HTTP_PORT/api/v1/status | grep -q '"ready": true' || fail "API status"
+grep -q '"ready": true' <<<"$(curl -fs -u x:kind-smoke-test-token localhost:$HTTP_PORT/api/v1/status)" || fail "API status"
 [ "$(curl -s -o /dev/null -w '%{http_code}' localhost:$HTTP_PORT/ui/)" = 401 ] || fail "UI must ask for a token"
 
 echo "checking that transfers run on the first pod only..."
-kubectl -n "$NS" logs sftpgate-1 -c sftpgate | grep -q "scheduled transfers run on another replica" \
+grep -q "scheduled transfers run on another replica" <<<"$(kubectl -n "$NS" logs sftpgate-1 -c sftpgate)" \
   || fail "sftpgate-1 should leave transfers to sftpgate-0"
-if kubectl -n "$NS" logs sftpgate-0 -c sftpgate | grep -q "run on another replica"; then
+if grep -q "run on another replica" <<<"$(kubectl -n "$NS" logs sftpgate-0 -c sftpgate)"; then
   fail "sftpgate-0 should run the transfers"
 fi
 
@@ -115,7 +117,7 @@ grep -q 'changed by helm upgrade' "$work/changed.yaml" || fail "test setup: coul
 helm upgrade sftpgate "$CHART" -n "$NS" -f "$work/changed.yaml" >/dev/null
 reloaded=""
 for _ in $(seq 1 120); do
-  if kubectl -n "$NS" logs sftpgate-0 -c sftpgate | grep -q '"msg":"config reloaded"'; then reloaded=yes; break; fi
+  if grep -q '"msg":"config reloaded"' <<<"$(kubectl -n "$NS" logs sftpgate-0 -c sftpgate)"; then reloaded=yes; break; fi
   sleep 1
 done
 [ -n "$reloaded" ] || fail "the config change was not picked up"
@@ -132,9 +134,9 @@ if [ -n "${GITSYNC_REF:-}" ]; then
     --wait --timeout 180s >/dev/null || fail "git-sync install did not become ready"
   stop_forwards
   forward service/sftpgate "$SFTP_PORT:22"
-  echo "ls /" | sftp_run 2>/dev/null | grep -q "from-git" || fail "the config from git is not in use"
+  grep -q "from-git" <<<"$(echo "ls /" | sftp_run 2>/dev/null)" || fail "the config from git is not in use"
   forward service/sftpgate-http "$HTTP_PORT:8080"
-  curl -fs localhost:$HTTP_PORT/metrics | grep 'sftpgate_config_info' | grep -q "revision=\"[0-9a-f]\{40\}\"" \
+  grep -q 'sftpgate_config_info.*revision="[0-9a-f]\{40\}"' <<<"$(curl -fs localhost:$HTTP_PORT/metrics)" \
     || fail "the live git commit is not reported"
 fi
 
