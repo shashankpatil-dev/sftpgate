@@ -50,8 +50,11 @@ SFTPgate only holds a file for the few seconds it takes to arrive completely.
 ### Files land complete, in your buckets
 - **No half files, ever.** A file reaches the bucket only after the partner
   finishes it. A dropped connection leaves nothing behind.
-- **Proof of integrity.** Each file's SHA-256 is stored with it, and the bucket
-  verifies an MD5 on save. A file damaged on the way is never stored.
+- **Proof of integrity.** Each file's SHA-256 is stored with it. After every
+  save, SFTPgate reads the object's size and checksum back from the bucket, and
+  only then tells the partner the upload worked. GCS and Azure also check an
+  MD5 while saving; S3 checks each request with its own checksums. A file
+  damaged or lost on the way is never reported as saved.
 - **Who sent it, from where:** the account, IP and session are stored with
   every file.
 - **No accidental overwrites.** Without the `overwrite` permission, a file can

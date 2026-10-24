@@ -343,7 +343,7 @@ flowchart LR
 | Lateral movement through SSH features | Only the `sftp` subsystem. No shell, exec, SCP, forwarding or agent. |
 | Secrets leaking via git | Secret fields **must** be `${env:}`/`${file:}`/`${secret:}` references, and `validate` (run in CI on every PR) rejects inline values. Passwords are bcrypt hashes even inside the secret store. The UI shows only the raw YAML, so secrets appear as references, never as values. See 6.1. |
 | Cloud credential exposure | Credentials come only from the runtime environment (workload identity / IAM). Nothing in YAML. |
-| Partial or corrupt files downstream | Commit on close. SHA-256 is stored in object metadata. MD5 is verified by the backend. |
+| Partial or corrupt files downstream | Commit on close. SHA-256 is stored in object metadata and read back after every save (size + checksum) before success is reported. GCS/Azure also verify an MD5; S3 uses SDK request checksums. |
 | Host impersonation | Persistent host keys from a secret. Fingerprint is documented for vendors. |
 | Container compromise blast radius | Distroless, non-root, read-only root FS, single writable spool volume, least-privilege bucket IAM per storage. |
 | Audit tampering | Audit goes off-box via stdout collection. The recommended sink is a retention-locked (WORM) bucket. |
