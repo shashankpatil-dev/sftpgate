@@ -45,8 +45,15 @@ type PGPDecrypt struct {
 	Key        string `yaml:"key"`
 	Passphrase string `yaml:"passphrase"`
 
+	// SignerKeys are the partner's public keys. When set, every file must
+	// be signed by one of them, or it is rejected.
+	SignerKeys []string `yaml:"signer_keys"`
+
 	// Keys is the private key, already unlocked with the passphrase.
 	Keys openpgp.EntityList `yaml:"-"`
+
+	// Signers are the parsed SignerKeys.
+	Signers openpgp.EntityList `yaml:"-"`
 }
 
 // PGPEncrypt encrypts the file for one or more public keys.
@@ -115,6 +122,7 @@ func (c *checker) steps(p string, steps []*Step, storages map[string]string) {
 func (c *checker) pgpDecrypt(p string, d *PGPDecrypt) {
 	c.secret(p+".key", d.Key, true)
 	c.secret(p+".passphrase", d.Passphrase, false)
+	d.Signers = c.publicKeys(p+".signer_keys", d.SignerKeys)
 	if c.unresolved(p + ".key") {
 		return
 	}
@@ -144,18 +152,25 @@ func (c *checker) pgpEncrypt(p string, e *PGPEncrypt) {
 	if len(e.Recipients) == 0 {
 		c.fail(p+".recipients", "at least one public key is required")
 	}
-	for i, r := range e.Recipients {
-		rp := fmt.Sprintf("%s.recipients[%d]", p, i)
-		if c.unresolved(rp) {
+	e.Keys = c.publicKeys(p+".recipients", e.Recipients)
+}
+
+// publicKeys parses a list of armored PGP public keys.
+func (c *checker) publicKeys(p string, armored []string) openpgp.EntityList {
+	var all openpgp.EntityList
+	for i, a := range armored {
+		kp := fmt.Sprintf("%s[%d]", p, i)
+		if c.unresolved(kp) {
 			continue
 		}
-		keys, err := openpgp.ReadArmoredKeyRing(bytes.NewBufferString(r))
+		keys, err := openpgp.ReadArmoredKeyRing(bytes.NewBufferString(a))
 		if err != nil {
-			c.fail(rp, "not an armored PGP public key: %v", err)
+			c.fail(kp, "not an armored PGP public key: %v", err)
 			continue
 		}
-		e.Keys = append(e.Keys, keys...)
+		all = append(all, keys...)
 	}
+	return all
 }
 
 func (c *checker) copyStep(p string, cp *Copy, storages map[string]string) {

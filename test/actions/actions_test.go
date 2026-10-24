@@ -72,6 +72,16 @@ accounts:
         perms: [upload]
         on_upload:
           - webhook: { url: "HOOK_URL" }
+      - path: /signed
+        storage: raw
+        prefix: signed/
+        perms: [upload]
+        on_upload:
+          - pgp_decrypt:
+              key: "${file:PRIVATE_KEY_FILE}"
+              passphrase: "${env:PGP_PASS}"
+              signer_keys: ["${file:SIGNER_KEY_FILE}"]
+          - copy: { storage: out, key: "verified/{filename}" }
 `
 
 // env is one runner with in-memory buckets and a fake webhook receiver.
@@ -83,6 +93,7 @@ type env struct {
 	out    *blob.Bucket
 	hook   *hookServer
 	entity *openpgp.Entity
+	signer *openpgp.Entity
 	now    time.Time
 	dir    string
 }
@@ -94,6 +105,8 @@ func newEnv(t *testing.T) *env {
 	e.now = time.Date(2026, 10, 24, 20, 0, 0, 0, time.UTC)
 
 	e.entity = writeKeys(t, e.dir)
+	e.signer = newPGPEntity(t)
+	writeFile(t, filepath.Join(e.dir, "signer.asc"), armored(t, openpgp.PublicKeyType, e.signer.Serialize))
 	t.Setenv("PGP_PASS", passphrase)
 	t.Setenv("HOOK_SECRET", hookSecret)
 
@@ -101,6 +114,7 @@ func newEnv(t *testing.T) *env {
 		"HOST_KEY_FILE", filepath.Join(e.dir, "host_key"),
 		"PRIVATE_KEY_FILE", filepath.Join(e.dir, "private.asc"),
 		"PUBLIC_KEY_FILE", filepath.Join(e.dir, "public.asc"),
+		"SIGNER_KEY_FILE", filepath.Join(e.dir, "signer.asc"),
 		"HOOK_URL", e.hook.URL,
 	).Replace(configTemplate)
 	e.load(src)
@@ -189,6 +203,37 @@ func TestDecryptCopyAndWebhook(t *testing.T) {
 	}
 	if len(e.queued("")) != 0 {
 		t.Fatal("a finished job must be removed from the queue")
+	}
+}
+
+func TestSignatureIsVerified(t *testing.T) {
+	e := newEnv(t)
+	stranger := newPGPEntity(t)
+
+	e.upload("/signed", "good.csv.pgp", encryptSigned(t, e.entity, e.signer, "signed by the partner"))
+	e.upload("/signed", "unsigned.csv.pgp", encrypt(t, e.entity, "not signed"))
+	e.upload("/signed", "stranger.csv.pgp", encryptSigned(t, e.entity, stranger, "signed by someone else"))
+	e.runner.RunDue(context.Background())
+
+	if got, ok := e.read(e.out, "verified/good.csv"); !ok || got != "signed by the partner" {
+		t.Fatalf("a correctly signed file must pass, got %q, %v", got, ok)
+	}
+	for _, name := range []string{"unsigned.csv", "stranger.csv"} {
+		if _, ok := e.read(e.out, "verified/"+name); ok {
+			t.Errorf("%s must not be passed on", name)
+		}
+	}
+
+	var errs []string
+	for _, f := range e.queued("failed") {
+		var job actions.Job
+		b, _ := os.ReadFile(f)
+		_ = json.Unmarshal(b, &job)
+		errs = append(errs, job.LastError)
+	}
+	all := strings.Join(errs, " | ")
+	if len(errs) != 2 || !strings.Contains(all, "not signed") || !strings.Contains(all, "unknown key") {
+		t.Fatalf("want one unsigned and one unknown-key failure, got %s", all)
 	}
 }
 
@@ -328,6 +373,7 @@ func TestStepValidation(t *testing.T) {
 		"HOST_KEY_FILE", filepath.Join(dir, "host_key"),
 		"PRIVATE_KEY_FILE", filepath.Join(dir, "private.asc"),
 		"PUBLIC_KEY_FILE", filepath.Join(dir, "public.asc"),
+		"SIGNER_KEY_FILE", filepath.Join(dir, "public.asc"),
 		"HOOK_URL", "https://hooks.example.com/x",
 	).Replace(configTemplate)
 	t.Setenv("HOOK_SECRET", hookSecret)
@@ -433,14 +479,30 @@ func writeFile(t *testing.T, path string, data []byte) {
 // encrypt returns data encrypted for entity, as a partner would send it.
 func encrypt(t *testing.T, entity *openpgp.Entity, data string) []byte {
 	t.Helper()
+	return encryptSigned(t, entity, nil, data)
+}
+
+// encryptSigned is encrypt, also signed by signer when it is not nil.
+func encryptSigned(t *testing.T, entity, signer *openpgp.Entity, data string) []byte {
+	t.Helper()
 	var out bytes.Buffer
-	w, err := openpgp.Encrypt(&out, openpgp.EntityList{entity}, nil, nil, nil)
+	w, err := openpgp.Encrypt(&out, openpgp.EntityList{entity}, signer, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = w.Write([]byte(data))
 	_ = w.Close()
 	return out.Bytes()
+}
+
+// newPGPEntity makes an unprotected PGP key pair, like a partner's signing key.
+func newPGPEntity(t *testing.T) *openpgp.Entity {
+	t.Helper()
+	e, err := openpgp.NewEntity("Partner", "", "partner@example.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 
 // hookServer records webhook calls and can fail the first few.

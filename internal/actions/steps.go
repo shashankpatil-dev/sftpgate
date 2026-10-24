@@ -125,8 +125,9 @@ func (r *Runner) download(ctx context.Context, cur *current) error {
 // armored (text) and binary PGP files are accepted. A tampered file fails
 // its integrity check and is rejected.
 //
-// shortcut: signatures are not verified; add a signer_keys option if
-// partners start signing their files.
+// With signer_keys, the file must also be signed by one of those keys.
+// The decrypted data stays in a temp file until the signature is checked,
+// so nothing unverified is ever passed on.
 func (r *Runner) decrypt(cur *current, d *config.PGPDecrypt) error {
 	in, err := os.Open(cur.path)
 	if err != nil {
@@ -143,7 +144,10 @@ func (r *Runner) decrypt(cur *current, d *config.PGPDecrypt) error {
 		src = block.Body
 	}
 
-	md, err := openpgp.ReadMessage(src, d.Keys, nil, nil)
+	// One key ring holds our private key (to decrypt) and the partner's
+	// public keys (to check the signature).
+	keyring := append(append(openpgp.EntityList{}, d.Keys...), d.Signers...)
+	md, err := openpgp.ReadMessage(src, keyring, nil, nil)
 	if err != nil {
 		return permanent("cannot decrypt: %v", err)
 	}
@@ -156,10 +160,32 @@ func (r *Runner) decrypt(cur *current, d *config.PGPDecrypt) error {
 	if _, err := io.Copy(out, md.UnverifiedBody); err != nil {
 		return permanent("decrypted data failed its integrity check: %v", err)
 	}
+	// The signature can only be checked once all of the data is read.
+	if err := checkSignature(md, d.Signers); err != nil {
+		return err
+	}
 
 	cur.path = out.Name()
 	cur.filename = trimPGPExt(cur.filename)
 	return out.Close()
+}
+
+// checkSignature makes sure a message was signed by one of the signers.
+// With no signers configured, signatures are not required.
+func checkSignature(md *openpgp.MessageDetails, signers openpgp.EntityList) error {
+	if len(signers) == 0 {
+		return nil
+	}
+	if !md.IsSigned {
+		return permanent("the file is not signed, but signer_keys requires a signature")
+	}
+	if len(signers.KeysById(md.SignedByKeyId)) == 0 {
+		return permanent("the file is signed by an unknown key %X", md.SignedByKeyId)
+	}
+	if md.SignatureError != nil {
+		return permanent("bad signature: %v", md.SignatureError)
+	}
+	return nil
 }
 
 // encrypt replaces the current file with a copy encrypted for the
