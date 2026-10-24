@@ -151,10 +151,10 @@ is in your log system.
 
 Ready-to-use files you can copy into your own setup:
 
-- [`deploy/compose/prometheus/alerts.yml`](deploy/compose/prometheus/alerts.yml):
+- [`deploy/helm/sftpgate/files/alerts.yml`](deploy/helm/sftpgate/files/alerts.yml):
   alerts for the server being down, login failure spikes, blocked IPs, storage
   errors, rejected config reloads, a low spool disk and failing post-upload actions.
-- [`deploy/compose/grafana/dashboards/sftpgate.json`](deploy/compose/grafana/dashboards/sftpgate.json):
+- [`deploy/helm/sftpgate/files/dashboard.json`](deploy/helm/sftpgate/files/dashboard.json):
   a dashboard with sessions, uploads, downloads, logins, traffic per account,
   transfer times, storage errors, denied requests and the running config version.
 
@@ -173,6 +173,45 @@ because tracing tools are often less locked down than audit logs.
 Mount the config **folder**, not the single file, in Docker and Kubernetes.
 Editors and git replace files instead of changing them, and a single-file mount
 keeps showing the old file, so hot reload would quietly stop working.
+
+## Deploying
+
+### Docker
+
+```sh
+ssh-keygen -t ed25519 -N "" -f ssh_host_ed25519_key
+docker run -d --name sftpgate --read-only --tmpfs /tmp \
+  -p 2222:2222 -p 8080:8080 \
+  -v "$PWD/config:/etc/sftpgate/config:ro" \
+  -v "$PWD/ssh_host_ed25519_key:/etc/sftpgate/keys/ssh_host_ed25519_key:ro" \
+  -v sftpgate-data:/var/lib/sftpgate \
+  -e SFTPGATE_CONFIG=/etc/sftpgate/config/sftpgate.yaml \
+  ghcr.io/shashankpatil-dev/sftpgate:0.3.0
+```
+
+The image is distroless and runs as user 65532 with a read-only root
+filesystem. `docker ps` shows its health from the built-in `sftpgate healthcheck`.
+Mount the config *folder*, not the file, so hot reload sees changes.
+
+### Kubernetes with Helm
+
+```sh
+kubectl create namespace sftpgate
+ssh-keygen -t ed25519 -N "" -f ssh_host_ed25519_key
+kubectl -n sftpgate create secret generic sftpgate-host-keys --from-file=ssh_host_ed25519_key
+helm install sftpgate deploy/helm/sftpgate -n sftpgate -f my-values.yaml
+```
+
+The chart runs a StatefulSet, so each pod gets its own disk for the spool and
+the post-upload queue, behind a LoadBalancer that keeps partners' real IPs. It
+supports secrets as env vars or files, git-sync, ServiceMonitor and
+PrometheusRule, a Grafana dashboard ConfigMap, an Ingress for the UI, and
+several replicas (scheduled transfers then run on the first pod only). See
+[`values.yaml`](deploy/helm/sftpgate/values.yaml) for every setting.
+
+### Kubernetes without Helm
+
+[`deploy/kubernetes/`](deploy/kubernetes) has the same thing as plain manifests.
 
 ## Configuration
 
@@ -254,6 +293,8 @@ make test     # unit and integration tests
 make lint     # golangci-lint
 make validate # check the example configs
 make check-monitoring # check the Prometheus config and test the alert rules
+make check-k8s        # lint the Helm chart and validate it against Kubernetes schemas
+make k8s-smoke        # install the chart on a local kind cluster and test it
 ```
 
 Tests live under `test/`. Design docs are in [`docs/`](docs): [PRD](docs/PRD.md),

@@ -1,11 +1,15 @@
-# Build a static binary.
-FROM golang:1.26-alpine AS build
+# Build a static binary. The build always runs on the build machine's own
+# platform and cross-compiles, which is much faster than emulating arm64.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/sftpgate ./cmd/sftpgate \
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/sftpgate ./cmd/sftpgate \
  && mkdir -p /out/spool
 
 # Run it on a minimal image with no shell, as a non-root user.

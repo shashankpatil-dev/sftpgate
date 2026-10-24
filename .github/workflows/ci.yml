@@ -65,3 +65,28 @@ jobs:
       - name: Stop the local setup
         if: always()
         run: make down
+
+  kubernetes:
+    runs-on: ubuntu-24.04
+    needs: [lint, test, checks]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+      - name: Chart lint, schema checks, manifests up to date
+        run: make check-k8s
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.30.0
+          cluster_name: sftpgate-test
+      - name: Install on kind and test
+        run: test/k8s/smoke.sh
+        env:
+          KEEP: "1"
+          # On pushes the commit is on GitHub, so git-sync can fetch it.
+          GITSYNC_REF: ${{ github.event_name == 'push' && github.sha || '' }}
