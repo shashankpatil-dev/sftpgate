@@ -28,6 +28,7 @@ lint:
 ## validate: check the example configs the way CI checks a pull request
 validate: build
 	bin/sftpgate validate -offline examples/sftpgate.yaml
+	bin/sftpgate validate -offline examples/sftpgate.full.yaml
 	bin/sftpgate validate -offline deploy/compose/config/sftpgate.yaml
 
 ## check-monitoring: check the Prometheus config and run the alert rule tests

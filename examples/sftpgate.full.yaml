@@ -1,0 +1,304 @@
+# =============================================================================
+# SFTPgate: every setting, explained
+# =============================================================================
+#
+# This file uses every feature SFTPgate has, with a comment on each line.
+# Copy it, delete what you don't need, and change the names.
+#
+# Check it before deploying:
+#   sftpgate validate -offline examples/sftpgate.full.yaml
+#   (-offline skips checks that need real secrets, files or the network)
+#
+# Two rules to remember:
+#   1. NO SECRET VALUES IN THIS FILE. Only references, filled in at runtime:
+#        ${env:NAME}          an environment variable (from a Kubernetes Secret)
+#        ${file:/path}        the contents of a file (a mounted Secret)
+#        ${secret:URL}        a cloud secret store, for example
+#                             ${secret:gcpsecretmanager://projects/acme/secrets/name}
+#      So this file is safe to keep in git and review in pull requests.
+#   2. Changes are picked up WITHOUT a restart. SFTPgate checks the file every
+#      reload_interval; a broken file is rejected and the old one keeps running.
+#
+# Sizes:     KiB, MiB, GiB (500MiB = 500 x 1024 x 1024 bytes)
+# Durations: 30s, 15m, 1h
+
+# Format version of this file. Always 1 for now.
+version: 1
+
+# -----------------------------------------------------------------------------
+# server: the SFTP side, where partners connect
+# -----------------------------------------------------------------------------
+server:
+  # Address and port to listen on. ":2222" means "every network card, port 2222".
+  # In Kubernetes the Service maps the public port 22 to this. Default ":2222".
+  listen: ":2222"
+
+  # The server's own identity keys (private keys, kept in a Secret).
+  # Partners save its fingerprint the first time and get warned if it ever
+  # changes, which protects them from fake servers. Generate one with:
+  #   ssh-keygen -t ed25519 -N "" -f ssh_host_ed25519_key
+  # Required. Never change it casually: every partner would see a warning.
+  host_keys:
+    - /etc/sftpgate/keys/ssh_host_ed25519_key
+
+  # IP ranges allowed to connect AT ALL, checked before anything else.
+  # Empty = anyone may try (each account can still have its own list below).
+  # CIDR format: "10.0.0.0/8" is a range, "13.232.10.4" is a single address.
+  allow_ips: []
+
+  # Text shown to partners before they log in. Often a legal notice.
+  banner: "Authorized use only. All access is logged."
+
+  # Disconnect a logged-in partner who does nothing for this long. Default 15m.
+  idle_timeout: 15m
+
+  # Wrong passwords or keys allowed in ONE connection before it is closed.
+  # Default 6.
+  max_auth_tries: 6
+
+  # Open connections allowed at once, all accounts together, per pod.
+  # Extra connections are refused straight away. Default 25.
+  max_connections: 25
+
+  # Folder on the pod's disk where uploads wait while the partner is still
+  # sending. A file reaches the bucket only when it is complete.
+  # Default /var/lib/sftpgate/spool.
+  spool_dir: /var/lib/sftpgate/spool
+
+  # Refuse new uploads when free disk space would drop below this, so the
+  # disk never fills halfway through an upload. Default 1GiB.
+  min_spool_free: 1GiB
+
+  # How often to check this file for changes. Default 10s.
+  # Sending the process SIGHUP reloads it immediately.
+  reload_interval: 10s
+
+  # Login throttle against password guessing: after max_failures failed
+  # logins from one IP within window, that IP is blocked for block.
+  # Defaults 5, 10m, 15m.
+  throttle:
+    max_failures: 5
+    window: 10m
+    block: 15m
+
+  # Time zone for {date} and {time} in keys, and for transfer schedules.
+  # Default UTC.
+  timezone: Asia/Kolkata
+
+# -----------------------------------------------------------------------------
+# http: health checks, metrics, and the read-only web UI and API
+# -----------------------------------------------------------------------------
+http:
+  # Port for /healthz, /readyz and /metrics (Prometheus). Default ":8080".
+  # Keep it inside the cluster; don't expose it to the internet.
+  listen: ":8080"
+
+  # Tokens that open the read-only UI (/ui) and API (/api): sessions, recent
+  # audit events, queued actions. No tokens = UI and API are off.
+  # Send one as "Authorization: Bearer <token>".
+  tokens:
+    - "${env:SFTPGATE_UI_TOKEN}"
+
+# -----------------------------------------------------------------------------
+# storages: the buckets where files really live, each with a short name
+# -----------------------------------------------------------------------------
+# The name (left) is used everywhere else in this file. The URL (right) says
+# which cloud and bucket. Credentials NEVER go here: they come from the pod's
+# identity (GKE workload identity, EKS IRSA, Azure workload identity).
+storages:
+  # Google Cloud Storage
+  recon-raw: "gs://acme-recon-raw"
+  # Amazon S3 (region in the URL)
+  reports: "s3://acme-reports?region=ap-south-1"
+  # Azure Blob Storage (the storage account comes from AZURE_STORAGE_ACCOUNT)
+  archive: "azblob://acme-archive"
+  # S3-compatible storage (MinIO, SeaweedFS...) at your own address
+  onprem: "s3://landing?endpoint=https://minio.internal.acme.in&region=us-east-1&use_path_style=true"
+
+# -----------------------------------------------------------------------------
+# actions: how post-upload work (on_upload below) runs
+# -----------------------------------------------------------------------------
+actions:
+  # Jobs processed at the same time. Default 4.
+  workers: 4
+  # Tries before a job is marked failed (shown in the UI, alert fires).
+  # Default 8.
+  max_attempts: 8
+  # Wait before the first retry; it doubles after every failure. Default 30s.
+  backoff: 30s
+
+# -----------------------------------------------------------------------------
+# accounts: who can log in, and what they can see and do
+# -----------------------------------------------------------------------------
+accounts:
+  # ---- A partner that uploads files, with every protection on ----
+  - # Login name. Lowercase letters, digits, - and _.
+    name: razorpay
+    # Free text, shown in the UI.
+    description: Daily settlement files
+
+    auth:
+      # "any" (default): a valid key OR a valid password is enough.
+      # "all": the partner needs its key AND its password (two-step login).
+      #        Works with OpenSSH, WinSCP, FileZilla. Not with Paramiko (Python).
+      mode: all
+      # Public keys allowed to log in (the partner sends you these; they're
+      # not secret). ed25519 or RSA (SHA-2). Old SHA-1-only software is
+      # refused on purpose.
+      public_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl razorpay-prod"
+      # A bcrypt HASH of the password, never the password itself. Make one with:
+      #   sftpgate hash-password
+      password_hash: "${env:RAZORPAY_PW_HASH}"
+
+    # IP ranges this account may connect from (on top of server.allow_ips).
+    # Empty = any IP.
+    allow_ips: ["52.66.0.0/16", "13.232.10.4"]
+
+    # Sessions this account may have open at once. 0 or missing = no limit
+    # (server.max_connections still applies).
+    max_sessions: 5
+
+    # What the partner sees. Each folder is a "window" onto one place in a
+    # bucket. The partner sees /inbound; the file really lands at
+    # gs://acme-recon-raw/razorpay/<name>. The partner can never go above it.
+    folders:
+      - # The folder name the partner sees.
+        path: /inbound
+        # Which storage (from storages: above).
+        storage: recon-raw
+        # Where inside the bucket. End it with "/".
+        prefix: razorpay/
+        # What the partner may do here:
+        #   list       see the files
+        #   download   fetch files
+        #   upload     send new files
+        #   overwrite  replace a file that already exists (otherwise refused)
+        #   delete     remove files
+        #   rename     rename or move files inside this folder
+        #   mkdir      create sub-folders (and remove empty ones)
+        perms: [list, upload]
+        # Only these file names may be uploaded (* = anything).
+        # Missing = any name.
+        patterns: ["*.csv", "*.csv.pgp"]
+        # Largest file allowed. Also the disk space reserved for each upload,
+        # so keep it close to real file sizes.
+        max_file_size: 500MiB
+
+        # Work done automatically after EVERY upload into this folder, in this
+        # order. It runs in the background with retries; the uploaded file
+        # itself is never changed.
+        on_upload:
+          # 1. Decrypt the PGP file. The result is passed to the next step.
+          - pgp_decrypt:
+              # Our private key, which can decrypt.
+              key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
+              passphrase: "${env:RECON_PGP_PASSPHRASE}"
+              # Optional: accept only files SIGNED by these keys (proves the
+              # file really came from Razorpay).
+              signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
+          # 2. Copy the result into another bucket.
+          #    Key placeholders: {account} {folder} {date} {time} {filename} {job_id}
+          - copy:
+              storage: archive
+              key: "razorpay/{date}/{filename}"
+          # 3. Tell your own service a file has arrived (HTTP POST with JSON).
+          #    The body is signed with this secret (HMAC-SHA256) so your
+          #    service can check the call really came from SFTPgate.
+          - webhook:
+              url: "https://recon.internal.acme.in/hooks/sftpgate"
+              secret: "${env:RECON_WEBHOOK_SECRET}"
+
+      # A second folder for the same partner: reports for them to download.
+      - path: /outbound
+        storage: reports
+        prefix: razorpay/
+        perms: [list, download, delete]
+
+  # ---- A partner that only downloads, logging in with a key ----
+  - name: gst-partner
+    description: Monthly GST return files
+    auth:
+      public_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl gst-partner"
+    allow_ips: ["203.0.113.0/24"]
+    folders:
+      - path: /returns
+        storage: reports
+        prefix: gst/
+        perms: [list, download]
+
+  # ---- An internal team logging in with a password, encrypting what it sends ----
+  - name: finance-team
+    auth:
+      password_hash: "${secret:gcpsecretmanager://projects/acme/secrets/finance-pw-hash}"
+    folders:
+      - path: /outgoing
+        storage: onprem
+        prefix: finance/
+        perms: [list, upload, overwrite, rename, mkdir]
+        on_upload:
+          # Encrypt for the auditor before archiving. Only the auditor's
+          # private key can open the copy.
+          - pgp_encrypt:
+              recipients: ["${file:/etc/sftpgate/secrets/auditor.pub.asc}"]
+          - copy:
+              storage: archive
+              key: "finance/{date}/{time}-{filename}.pgp"
+
+# -----------------------------------------------------------------------------
+# remotes: OTHER SFTP servers that SFTPgate connects to (for transfers below)
+# -----------------------------------------------------------------------------
+remotes:
+  # A short name used by transfers.
+  bank:
+    # Address and port of their SFTP server.
+    addr: sftp.bank.example:22
+    # The login name they gave you.
+    user: acme
+    # THEIR server's public host key, pinned. If the server ever shows another
+    # key, SFTPgate refuses to connect (protects against fake servers).
+    # Get it from them, or with: ssh-keyscan -t ed25519 sftp.bank.example
+    host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+    # OUR private key for logging in to them (they hold the public half).
+    private_key: "${file:/etc/sftpgate/secrets/bank_id_ed25519}"
+    # Or a password instead, if that's what they gave you:
+    # password: "${env:BANK_SFTP_PASSWORD}"
+
+# -----------------------------------------------------------------------------
+# transfers: scheduled jobs that move files between a remote and a bucket
+# -----------------------------------------------------------------------------
+# With several pods, transfers run on ONE pod only, so each file moves once.
+transfers:
+  # PULL: fetch files FROM a remote server INTO our bucket.
+  - # A unique name; it appears in logs, metrics and the UI.
+    name: bank-statements
+    # When to run, in cron format: "minute hour day month weekday", in
+    # server.timezone. "0 6 * * *" = every day at 06:00.
+    #   "0 10,18 * * *"  10:00 and 18:00 daily
+    #   "*/30 * * * *"   every 30 minutes
+    #   "0 9 * * 1-5"    09:00 Monday to Friday
+    schedule: "0 6 * * *"
+    pull:
+      # remote: which server. path: which folder there. pattern: which files.
+      from: { remote: bank, path: /out, pattern: "*.csv" }
+      # Where to save each file. The key must contain {filename}.
+      to: { storage: recon-raw, key: "bank/{date}/{filename}" }
+      # true = delete the file on their server once it's safely in our bucket.
+      # Default false.
+      delete_after: false
+
+  # PUSH: send files FROM our bucket TO a remote server.
+  - name: bank-payouts
+    schedule: "*/30 * * * *"
+    push:
+      # Files directly under this prefix (not sub-folders) matching pattern.
+      from: { storage: reports, prefix: payouts/outbox/, pattern: "*.csv" }
+      # The folder on their server. Each file is written under a temporary
+      # name and renamed when complete, so they never see a half file.
+      to: { remote: bank, path: /in }
+      # What to do with OUR copy after a successful send:
+      #   keep             leave it, and skip files they already have (default)
+      #   delete           delete it from our bucket
+      #   move:<prefix>    move it, e.g. to a "sent" folder, so it's never sent twice
+      after: "move:payouts/sent/"

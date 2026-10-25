@@ -239,8 +239,12 @@ several replicas (scheduled transfers then run on the first pod only). See
 
 ## Configuration
 
-See [`examples/sftpgate.yaml`](examples/sftpgate.yaml) for a full example. A
-minimal account looks like this:
+See [`examples/sftpgate.yaml`](examples/sftpgate.yaml) for a production-style
+example, [`examples/sftpgate.full.yaml`](examples/sftpgate.full.yaml) for every
+setting explained line by line, and
+[`examples/REVENUE-ASSURANCE.md`](examples/REVENUE-ASSURANCE.md) for a
+walkthrough of adding SFTPgate to an existing service. A minimal account looks
+like this:
 
 ```yaml
 accounts:
