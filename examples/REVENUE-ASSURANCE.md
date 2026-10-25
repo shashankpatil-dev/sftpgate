@@ -3,6 +3,10 @@
 A worked example of how a team adds SFTPgate to a service it already has,
 from the first file to production.
 
+This page covers **sending** files out (to EY). For **receiving** files from
+payment gateways in the same service, see
+[REVENUE-ASSURANCE-INBOUND.md](REVENUE-ASSURANCE-INBOUND.md).
+
 ## The situation
 
 - **revenue-assurance** is an existing Kotlin (Ktor) service with its own
