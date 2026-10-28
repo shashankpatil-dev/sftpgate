@@ -1,5 +1,7 @@
 # Config for the local test setup in docker-compose.yml.
-# One demo account sees two folders: one backed by an S3 mock, one by a GCS emulator.
+# One demo account sees four folders, backed by an S3 mock and a GCS
+# emulator. Every hook and every kind of action is used somewhere below, and
+# test/e2e/run.sh checks each one.
 
 version: 1
 
@@ -8,6 +10,8 @@ server:
   min_spool_free: 100MiB
   reload_interval: 2s
   timezone: Asia/Kolkata
+  # Retry failed actions quickly, so the demo shows results fast.
+  queue: { backoff: 2s }
 
 # Opens the read-only web UI at http://localhost:8080/ui/
 http:
@@ -17,13 +21,40 @@ storages:
   s3: "s3://recon-raw?endpoint=http://s3:9090&use_path_style=true&region=us-east-1"
   gcs: "gs://recon-raw"
 
+# Named actions, run by the hooks of the folders and transfers below.
+actions:
+  # Reports must be a CSV with these columns and at least one row.
+  recon-csv:
+    check: { csv: { header: [id, amount], min_rows: 1 } }
+  not-empty:
+    check: { min_size: 1 }
+  copy-to-gcs:
+    copy: { storage: gcs, key: "demo/copies/{filename}" }
+  plain-copy:
+    copy: { storage: gcs, key: "demo/decrypted/{date}/{filename}" }
+  # The demo uses one PGP key for everything: we decrypt with it, partners
+  # sign with it, and we encrypt for it. Real setups have one key per party.
+  decrypt:
+    pgp_decrypt:
+      key: "${file:/etc/sftpgate/keys/pgp/demo.asc}"
+      passphrase: "${env:DEMO_PGP_PASSPHRASE}"
+      signer_keys: ["${file:/etc/sftpgate/keys/pgp/demo.pub.asc}"]
+  encrypt:
+    pgp_encrypt: { recipients: ["${file:/etc/sftpgate/keys/pgp/demo.pub.asc}"] }
+  # The "hooks" container records every call; see http://localhost:9999/calls
+  notify:
+    webhook:
+      url: http://hooks:9000/hook
+      secret: "${env:DEMO_WEBHOOK_SECRET}"
+      headers: { X-Team: demo }
+
 accounts:
   - name: demo
     description: Local test account (password is "demo")
     auth:
       public_keys:
         - "${file:/etc/sftpgate/keys/demo_user.pub}"
-        # Used by the demo-pull transfer below.
+        # Used by the demo-pull and demo-push transfers below.
         - "${file:/etc/sftpgate/keys/transfer_key.pub}"
       password_hash: "${env:DEMO_PW_HASH}"
     folders:
@@ -31,16 +62,32 @@ accounts:
         storage: s3
         prefix: demo/
         perms: [list, download, upload, overwrite, delete, rename, mkdir]
-        # Every file uploaded here is also copied into the GCS bucket.
-        on_upload:
-          - copy: { storage: gcs, key: "demo/copies/{filename}" }
+        hooks:
+          # Every upload is copied into the GCS bucket, then announced.
+          after_upload: [copy-to-gcs, notify]
+          after_download: [notify]
       - path: /gcs
         storage: gcs
         prefix: demo/
         perms: [list, download, upload, overwrite, delete, rename, mkdir]
+      # Only well-formed CSV reports get in; others are refused with the reason.
+      - path: /recon
+        storage: s3
+        prefix: demo-recon/
+        perms: [list, upload, download]
+        hooks:
+          before_upload: [recon-csv]
+          after_upload: [notify]
+      # Encrypted, signed reports: decrypted, checked, then copied in plain.
+      - path: /pgp
+        storage: s3
+        prefix: demo-pgp/
+        perms: [list, upload]
+        patterns: ["*.pgp"]
+        hooks:
+          after_upload: [decrypt, recon-csv, plain-copy, notify]
 
-# A scheduled transfer that pulls from this same server, to show how it works:
-# every 5 seconds, *.pull files in the demo account's /s3 folder move to /gcs/pulled.
+# Scheduled transfers against this same server, to show how they work.
 remotes:
   self:
     addr: localhost:2222
@@ -49,9 +96,24 @@ remotes:
     private_key: "${file:/etc/sftpgate/keys/transfer_key}"
 
 transfers:
+  # Every 5 seconds, *.pull files in /s3 move to /gcs/pulled.
   - name: demo-pull
     schedule: "@every 5s"
     pull:
       from: { remote: self, path: /s3, pattern: "*.pull" }
       to: { storage: gcs, key: "demo/pulled/{filename}" }
       delete_after: true
+    hooks:
+      before_pull: [not-empty]
+      after_pull: [notify]
+  # Every 5 seconds, CSVs in /s3/outbox are checked, encrypted and sent to
+  # /gcs/inbox, then moved to /s3/sent. A bad CSV stays in the outbox.
+  - name: demo-push
+    schedule: "@every 5s"
+    push:
+      from: { storage: s3, prefix: demo/outbox/, pattern: "*.csv" }
+      to: { remote: self, path: /gcs/inbox }
+      after: "move:demo/sent/"
+    hooks:
+      before_push: [recon-csv, encrypt]
+      after_push: [notify]

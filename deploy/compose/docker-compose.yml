@@ -11,6 +11,7 @@
 #   Prometheus:         http://localhost:9090 (Alerts tab shows the alert rules)
 #   Jaeger (traces):    http://localhost:16686
 #   SFTPgate web UI:    http://localhost:8080/ui/ (any user, password dev-only-ui-token)
+#   Webhook calls:      http://localhost:9999/calls
 
 name: sftpgate-dev
 
@@ -33,6 +34,9 @@ services:
       SFTPGATE_UI_TOKEN: dev-only-ui-token
       # Sends traces to Jaeger. Without this variable tracing is off.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Dev only: signs webhooks, and unlocks the demo PGP key from make dev-keys.
+      DEMO_WEBHOOK_SECRET: dev-only-webhook-secret
+      DEMO_PGP_PASSPHRASE: dev-only-pgp-passphrase
     volumes:
       # Mount the folder, not the file. Editors and git replace files instead
       # of changing them, and a single-file mount would keep the old one,
@@ -51,7 +55,20 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
+      hooks:
+        condition: service_started
     restart: on-failure
+
+  # Receives the demo's webhooks and checks their signatures.
+  hooks:
+    image: python:3.12.7-alpine3.20
+    command: ["python", "/receiver.py"]
+    environment:
+      WEBHOOK_SECRET: dev-only-webhook-secret
+    ports:
+      - "9999:9000"
+    volumes:
+      - ./hooks/receiver.py:/receiver.py:ro
 
   s3:
     image: adobe/s3mock:4.7.0

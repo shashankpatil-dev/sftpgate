@@ -67,8 +67,19 @@ dev-keys:
 	test -f .dev/keys/demo_user || ssh-keygen -q -t ed25519 -N "" -f .dev/keys/demo_user
 	test -f .dev/keys/transfer_key || ssh-keygen -q -t ed25519 -N "" -f .dev/keys/transfer_key
 	chmod 600 .dev/keys/demo_user
+	# A PGP key for the demo's encrypt and decrypt actions, protected with
+	# the dev-only passphrase from docker-compose.yml.
+	test -f .dev/keys/pgp/demo.asc || { \
+		mkdir -p .dev/keys/pgp .dev/keys/gnupg && chmod 700 .dev/keys/gnupg && \
+		gpg --homedir .dev/keys/gnupg --batch --pinentry-mode loopback --passphrase dev-only-pgp-passphrase \
+			--quick-gen-key "SFTPgate demo <demo@sftpgate.local>" rsa3072 sign,cert never && \
+		gpg --homedir .dev/keys/gnupg --batch --pinentry-mode loopback --passphrase dev-only-pgp-passphrase \
+			--quick-add-key "$$(gpg --homedir .dev/keys/gnupg --list-keys --with-colons demo@sftpgate.local | awk -F: '/^fpr/ {print $$10; exit}')" rsa3072 encr never && \
+		gpg --homedir .dev/keys/gnupg --armor --export demo@sftpgate.local > .dev/keys/pgp/demo.pub.asc && \
+		gpg --homedir .dev/keys/gnupg --batch --pinentry-mode loopback --passphrase dev-only-pgp-passphrase \
+			--armor --export-secret-keys demo@sftpgate.local > .dev/keys/pgp/demo.asc; }
 	# Dev only: the container runs as a different user and must read these keys.
-	chmod 644 .dev/keys/ssh_host_ed25519_key .dev/keys/transfer_key
+	chmod 644 .dev/keys/ssh_host_ed25519_key .dev/keys/transfer_key .dev/keys/pgp/demo.asc
 
 ## up: start SFTPgate with the S3 mock and the GCS emulator
 up: dev-keys
