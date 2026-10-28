@@ -40,9 +40,12 @@ check-monitoring:
 
 ## manifests: regenerate the plain Kubernetes manifests from the Helm chart
 manifests:
+	@# Rendered to a temp file first: if helm fails, the old file stays as it was.
+	@helm template sftpgate $(CHART) --namespace sftpgate > deploy/kubernetes/.sftpgate.yaml.tmp || { rm -f deploy/kubernetes/.sftpgate.yaml.tmp; exit 1; }
 	@{ echo "# Generated from deploy/helm/sftpgate by 'make manifests'. Do not edit by hand."; \
 	  echo "# See deploy/kubernetes/README.md before applying."; \
-	  helm template sftpgate $(CHART) --namespace sftpgate; } > deploy/kubernetes/sftpgate.yaml
+	  cat deploy/kubernetes/.sftpgate.yaml.tmp; } > deploy/kubernetes/sftpgate.yaml
+	@rm deploy/kubernetes/.sftpgate.yaml.tmp
 
 ## check-k8s: lint the chart, validate it against Kubernetes schemas, and check the manifests are up to date
 check-k8s:
