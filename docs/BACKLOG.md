@@ -21,24 +21,18 @@ Ideas and known gaps, not scheduled yet. Newest first.
   Use consistent attribute names and error status on failures, so trace-based
   metrics (span metrics in Tempo, Jaeger or Datadog) can drive alerts, for
   example "p95 of `sftp.upload` for razorpay".
-- **Better webhook publishing.** Today a webhook is only an `on_upload` step.
-  Add event webhooks for `upload`, `transfer_done`, `transfer_failed`,
-  `action_gave_up` and `auth_failed_spike`, with the same HMAC signing and
-  retries, so teams can notify Slack or their own service without
-  Alertmanager.
-- **`before_upload` checks on incoming files.** Uploads already wait on the
-  spool disk until complete, so they can be checked **before** they're saved
-  and before the partner is told "OK". A failed check refuses the upload with
-  a clear message to the partner, and the file is never stored. Checks: min and
-  max size, non-empty, CSV header or column count, row count > 0, and
-  duplicate content (a SHA-256 already received under another name).
+- **Webhooks for system events.** Actions and hooks (v0.4) made webhooks
+  work for uploads, downloads, pushes and pulls. Still missing: events that
+  aren't about one file, like `transfer_failed`, `action_gave_up` and
+  `auth_failed_spike`, so teams can notify Slack without Alertmanager.
+- **More checks.** Duplicate content (a SHA-256 already received under another
+  name, which needs a store of seen hashes), Excel sheets, and JSON schema.
+- **`rejected/` for push transfers.** Today a file that fails `before_push`
+  stays in the outbox and fails every run until someone fixes it. Moving it to
+  a configurable prefix would stop the repeat failures.
 - **Expected-file alerts.** "Razorpay's file must arrive by 11:00": a metric or
   alert when an expected upload or transfer file is missing.
-- **`before_send` steps for push transfers.** Checks and changes before a file
-  is sent to a partner: `check` (min/max size, non-empty), `pgp_encrypt` for the
-  vendor's key, verify the stored SHA-256. A file that fails goes to a
-  `rejected/` prefix and is reported instead of sent.
-- **`enabled: false` on a step or transfer**, to pause it without deleting it.
+- **`enabled: false` on an action, hook or transfer**, to pause it without deleting it.
 - **Streaming uploads** for sequential writers, skipping the spool disk.
 - **Publish the Helm chart** as an OCI artifact on release, so teams don't need
   to clone the repository to install it.

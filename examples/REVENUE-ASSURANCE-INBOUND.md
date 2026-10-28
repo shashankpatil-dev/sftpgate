@@ -67,6 +67,28 @@ storages:
   ra-recon: "gs://acme-revenue-assurance-recon"   # incoming reports (new)
   ra-gst: "gs://acme-revenue-assurance-gst"       # GST files for EY (outbound guide)
 
+# Named actions: defined once, run by the hooks of each gateway's folder.
+actions:
+  # Razorpay's settlement CSV must have these columns and at least one row.
+  razorpay-csv:
+    check: { min_size: 100, csv: { header: [settlement_id, payment_id, amount, fee, tax, settled_at], min_rows: 1 } }
+  # Cashfree sends Excel files, which can't be read as CSV: limits only.
+  not-tiny:
+    check: { min_size: 1KiB, max_size: 200MiB }
+  phonepe-csv:
+    check: { csv: { header: [transaction_id, amount, settlement_date], min_rows: 1 } }
+  decrypt-phonepe:
+    pgp_decrypt:
+      key: "${file:/etc/sftpgate/secrets/pgp/ra-private.asc}"
+      passphrase: "${env:RA_PGP_PASSPHRASE}"
+      signer_keys: ["${file:/etc/sftpgate/secrets/pgp/phonepe-signing.pub.asc}"]
+  phonepe-plain:
+    copy: { storage: ra-recon, key: "phonepe/decrypted/{date}/{filename}" }
+  notify-ra:
+    webhook:
+      url: "http://revenue-assurance.revenue-assurance.svc.cluster.local:8080/internal/sftp/uploaded"
+      secret: "${env:RA_WEBHOOK_SECRET}"
+
 accounts:
   # ---------------- Razorpay: key login, plain CSV ----------------
   - name: razorpay
@@ -83,10 +105,9 @@ accounts:
         perms: [list, upload]
         patterns: ["*.csv"]
         max_file_size: 200MiB
-        on_upload:
-          - webhook: &notify
-              url: "http://revenue-assurance.revenue-assurance.svc.cluster.local:8080/internal/sftp/uploaded"
-              secret: "${env:RA_WEBHOOK_SECRET}"
+        hooks:
+          before_upload: [razorpay-csv]  # a broken file is refused at the door
+          after_upload: [notify-ra]
 
   # ---------------- Cashfree: key AND password ----------------
   - name: cashfree
@@ -105,8 +126,9 @@ accounts:
         perms: [list, upload]
         patterns: ["*.csv", "*.xlsx"]
         max_file_size: 200MiB
-        on_upload:
-          - webhook: *notify
+        hooks:
+          before_upload: [not-tiny]
+          after_upload: [notify-ra]
 
   # ---------------- PhonePe: PGP-encrypted files ----------------
   - name: phonepe
@@ -123,15 +145,9 @@ accounts:
         perms: [list, upload]
         patterns: ["*.pgp", "*.gpg"]
         max_file_size: 200MiB
-        on_upload:
-          - pgp_decrypt:
-              key: "${file:/etc/sftpgate/secrets/pgp/ra-private.asc}"
-              passphrase: "${env:RA_PGP_PASSPHRASE}"
-              signer_keys: ["${file:/etc/sftpgate/secrets/pgp/phonepe-signing.pub.asc}"]
-          - copy:
-              storage: ra-recon
-              key: "phonepe/decrypted/{date}/{filename}"
-          - webhook: *notify
+        hooks:
+          # Encrypted files can only be checked once decrypted.
+          after_upload: [decrypt-phonepe, phonepe-csv, phonepe-plain, notify-ra]
 
 # ---- Outbound to EY, unchanged from the first guide ----
 remotes:
@@ -165,9 +181,11 @@ you.
 | `patterns` | Only report files are accepted. Anything else is refused at upload. |
 | `max_file_size: 200MiB` | Daily recon files are usually a few MB; this blocks a mistaken huge upload. |
 | `mode: all` (Cashfree) | Shows key **and** password together, for a gateway that insists on both. Most use keys only. |
-| `pgp_decrypt` (PhonePe) | Some gateways encrypt reports with your PGP key. SFTPgate decrypts them (and checks they're signed by PhonePe), so the Kotlin code never handles PGP. The uploaded file stays as it was, for audit. |
-| `webhook` | Tells revenue-assurance straight away. No polling the bucket. |
-| `&notify` / `*notify` | A YAML shortcut: `&notify` names the block, and `*notify` repeats it. All three gateways call the same endpoint without copying it three times. |
+| `actions:` | Each piece of work is defined once, with a name, and every folder lists the ones it runs. All three gateways use the same `notify-ra`. |
+| `before_upload` checks | A report with the wrong columns, no rows, or a tiny size is **refused while the gateway is still connected**, and never reaches revenue-assurance. The reason is in the audit log; tell the gateway "a refused upload means fix and resend", because most SFTP clients only show a generic failure. |
+| `decrypt-phonepe` | Some gateways encrypt reports with your PGP key. SFTPgate decrypts them (and checks they're signed by PhonePe), so the Kotlin code never handles PGP. The uploaded file stays as it was, for audit. |
+| `phonepe-csv` after decrypting | Encrypted files can't be checked at the door, so the check runs after decrypting. A bad file stops there: no plain copy, no webhook, and `SftpgateActionsGaveUp` fires. |
+| `notify-ra` | Tells revenue-assurance straight away. No polling the bucket. |
 
 ## 3. What revenue-assurance receives
 
@@ -201,7 +219,7 @@ X-Sftpgate-Signature: sha256=<hex HMAC-SHA256 of the body, using RA_WEBHOOK_SECR
 - **`key`** is the file as uploaded. **`copies`** lists files made by earlier
   steps; for PhonePe, **read `copies[0].key`**, the decrypted one.
 - **Answer with any 2xx** (200, 202...) to say "got it". Anything else, or no
-  answer, is **retried** with growing waits, up to `actions.max_attempts`.
+  answer, is **retried** with growing waits, up to `server.queue.max_attempts`.
 - **Because of retries, the same `job_id` can arrive twice.** Ignore one
   you've already handled.
 

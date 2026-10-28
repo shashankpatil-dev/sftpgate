@@ -483,29 +483,52 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 ---
 
-## 8. Post-upload actions
+## 8. Actions and hooks
 
-**Post-upload actions / `on_upload`**
-: Steps that run automatically after a file is saved in a folder, in order,
-  like "decrypt it, copy it to the warehouse bucket, then tell the recon
-  system". The uploaded original is never changed.
+**Action / `actions:`**
+: A named piece of work done on a file, defined once at the top of the config,
+  like `recon-csv` or `notify-recon`. Each action is exactly one kind:
+  `check`, `pgp_decrypt`, `pgp_encrypt`, `copy` or `webhook`.
+
+**Hook / `hooks:`**
+: A point in a file's way where actions run, listed by name on a folder or a
+  transfer: `before_upload`, `after_upload`, `after_download` on folders;
+  `before_push`/`after_push` and `before_pull`/`after_pull` on transfers.
+  "Upload" and "download" are what a partner does; "push" and "pull" are what
+  SFTPgate's own transfers do.
+
+**"Before" hook**
+: Runs while something waits (a partner's upload, or a transfer about to send
+  or store). It may only check the file, or for a push also encrypt it. A
+  failed check stops the file: it isn't stored, or isn't sent.
+
+**"After" hook**
+: Runs in the background once the file has moved, with retries. Any action.
+
+**Check / `check`**
+: An action that only reads the file and rejects it if a rule fails: size
+  limits, or a CSV's header, row count and column count.
+
+**Rejected / `result: denied`**
+: A file refused by a check. The reason is in the audit log; the partner's
+  client gets a refusal (most only show a generic failure).
 
 **Step**
-: One action in `on_upload`. Each step is exactly one of `pgp_decrypt`,
-  `pgp_encrypt`, `copy` or `webhook`.
+: One action as it runs. Also the older word for the items of `on_upload:`,
+  which still works as another way to write `hooks.after_upload`.
 
 **Landing file / landing object**
 : The file exactly as the partner uploaded it. Steps read it but never
   change it.
 
 **Job**
-: One saved file waiting for (or going through) its post-upload steps.
+: One file waiting for (or going through) the actions of an "after" hook.
 
 **Queue / action queue**
 : The list of jobs waiting to run, kept as small files on disk
   (`<spool_dir>/queue`). Because they're on disk, a restart doesn't lose them.
 
-**Worker / `workers`**
+**Worker / `server.queue.workers`**
 : A background helper that takes jobs from the queue and runs them. Several
   run at once. Default 4.
 
@@ -516,7 +539,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 : The wait before a retry, which doubles each time: 30s, 1m, 2m, 4m… up to
   1 hour. This gives a broken system time to recover.
 
-**`max_attempts`**
+**`server.queue.max_attempts`**
 : How many times a job is tried before SFTPgate gives up. Default 8.
 
 **Failed job / `queue/failed`**
@@ -525,8 +548,8 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Permanent failure**
 : A failure that retrying can't fix, like a folder removed from the config, a
-  file changed in the bucket, or a file that can't be decrypted. It goes to
-  `failed` at once.
+  file changed in the bucket, a file that can't be decrypted, or a failed
+  check. It goes to `failed` at once.
 
 **At-least-once**
 : A job always runs, but in rare cases (after a crash or retry) it can run
@@ -682,7 +705,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Web UI**
 : Read-only web pages at `/ui/`. They show open sessions, recent events,
-  post-upload jobs and the running config. It's for the operations and
+  action jobs and the running config. It's for the operations and
   security team, not for partners.
 
 **API**
@@ -720,7 +743,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
   | `auth_failed` | a login fails |
   | `session_start` / `session_end` | a partner logs in or disconnects |
   | `upload`, `download`, `delete`, `rename`, `mkdir`, `rmdir` | file operations |
-  | `action` | a post-upload job finished or failed |
+  | `action` | an action job finished or failed |
   | `transfer` | a scheduled transfer moved a file or failed |
   | `config_reload` | a new config was accepted or rejected |
 

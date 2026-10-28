@@ -25,6 +25,11 @@ server:
     max_failures: 5
     window: 10m
     block: 15m
+  # How the actions of after_* hooks run in the background. These are the defaults.
+  queue:
+    workers: 4
+    max_attempts: 8
+    backoff: 30s
 
 http:
   listen: ":8080"
@@ -36,11 +41,27 @@ storages:
   reports: "s3://acme-reports?region=ap-south-1"
   warehouse: "gs://acme-warehouse-landing"
 
-# How post-upload actions run. These are the defaults.
+# Named actions. Folders and transfers run them by name from their hooks.
 actions:
-  workers: 4
-  max_attempts: 8
-  backoff: 30s
+  # Reject a settlement file that isn't the CSV we expect.
+  settlement-csv:
+    check:
+      min_size: 100
+      csv: { header: [settlement_id, payment_id, amount, fee, settled_at], min_rows: 1 }
+  decrypt-razorpay:
+    pgp_decrypt:
+      key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
+      passphrase: "${env:RECON_PGP_PASSPHRASE}"
+      # Only accept files signed by Razorpay's own key.
+      signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
+  to-warehouse:
+    copy:
+      storage: warehouse
+      key: "{account}/{date}/{filename}"
+  notify-recon:
+    webhook:
+      url: "https://recon.internal.acme.in/hooks/sftpgate"
+      secret: "${env:RECON_WEBHOOK_SECRET}"
 
 accounts:
   # A payment gateway that uploads daily settlement files and downloads
@@ -61,25 +82,18 @@ accounts:
         perms: [list, upload]
         patterns: ["*.csv", "*.csv.pgp"]
         max_file_size: 500MiB
-        # After each upload: decrypt it, put the plain file in the warehouse
-        # bucket under today's date, then tell the recon service.
-        # The uploaded file itself is never changed.
-        on_upload:
-          - pgp_decrypt:
-              key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
-              passphrase: "${env:RECON_PGP_PASSPHRASE}"
-              # Only accept files signed by Razorpay's own key.
-              signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
-          - copy:
-              storage: warehouse
-              key: "razorpay/{date}/{filename}"
-          - webhook:
-              url: "https://recon.internal.acme.in/hooks/sftpgate"
-              secret: "${env:RECON_WEBHOOK_SECRET}"
+        # After each upload: decrypt it, check it's the CSV we expect, put the
+        # plain file in the warehouse bucket under today's date, then tell
+        # the recon service. The uploaded file itself is never changed.
+        hooks:
+          after_upload: [decrypt-razorpay, settlement-csv, to-warehouse, notify-recon]
       - path: /outbound
         storage: reports
         prefix: razorpay/
         perms: [list, download, delete]
+        # Tell the recon service when Razorpay has fetched its report.
+        hooks:
+          after_download: [notify-recon]
 
   # A GST filing partner that only downloads the files we prepare.
   - name: gst-partner
@@ -111,6 +125,8 @@ transfers:
     pull:
       from: { remote: bank, path: /out, pattern: "*.csv" }
       to: { storage: recon-raw, key: "bank/{date}/{filename}" }
+    hooks:
+      after_pull: [notify-recon]
 
   # Every 30 minutes, send prepared payout files and move them to sent/.
   - name: bank-payouts

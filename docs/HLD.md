@@ -130,7 +130,7 @@ flowchart LR
 - OpenTelemetry tracer (v0.2) is a no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ### 3.8 Action runner (v0.2)
-- After a committed upload, writes a job file `queue/<id>.json`. N workers process jobs, run the folder's `on_upload` steps in order, and retry with exponential backoff. On success the job file is deleted. After `max_attempts` it moves to `queue/failed/`.
+- After a committed upload, writes a job file `queue/<id>.json`. N workers process jobs, run the actions of the folder's or transfer's `after_*` hook in order (v0.4: named `actions:` run from `hooks:`; `before_*` hooks run synchronously and can refuse a file), and retry with exponential backoff. On success the job file is deleted. After `max_attempts` it moves to `queue/failed/`.
 - Steps read from the landing object and write to new objects. The landing object is never modified.
 - Pending jobs are re-enqueued on startup.
 

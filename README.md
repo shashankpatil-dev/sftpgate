@@ -52,34 +52,57 @@ The compose file is [`deploy/compose/docker-compose.yml`](deploy/compose/docker-
 and the config it runs is [`deploy/compose/config/sftpgate.yaml`](deploy/compose/config/sftpgate.yaml).
 Edit that file while it runs and SFTPgate reloads it within a few seconds.
 
-## Post-upload actions
+## Actions and hooks
 
-A folder can run steps after every upload. The uploaded file is never changed:
-steps work on a copy and write new files.
+Define **actions** once, by name, and run them from the **hooks** of folders and
+transfers. The original file is never changed: actions work on a copy and write
+new files.
 
 ```yaml
-folders:
-  - path: /inbound
-    storage: recon-raw
-    perms: [upload]
-    on_upload:
-      - pgp_decrypt: { key: "${file:/secrets/private.asc}", passphrase: "${env:PGP_PASS}" }
-      - copy: { storage: warehouse, key: "razorpay/{date}/{filename}" }
-      - webhook: { url: "https://recon.internal/hooks/sftpgate", secret: "${env:HOOK_SECRET}" }
+actions:
+  recon-csv:  { check: { min_size: 100, csv: { header: [id, amount], min_rows: 1 } } }
+  decrypt:    { pgp_decrypt: { key: "${file:/secrets/private.asc}", passphrase: "${env:PGP_PASS}" } }
+  warehouse:  { copy: { storage: warehouse, key: "{account}/{date}/{filename}" } }
+  notify:     { webhook: { url: "https://recon.internal/hooks/sftpgate", secret: "${env:HOOK_SECRET}" } }
+
+accounts:
+  - name: razorpay
+    folders:
+      - path: /inbound
+        storage: recon-raw
+        perms: [upload]
+        hooks:
+          before_upload: [recon-csv]                 # refuse a bad file, with the reason
+          after_upload: [warehouse, notify]          # background, with retries
 ```
 
-| Step | What it does |
+| Action | What it does |
 |---|---|
-| `pgp_decrypt` | Decrypts the file (armored or binary). Strips `.pgp`, `.gpg` or `.asc` from the name. With `signer_keys` (the partner's public keys), the file must also be signed by one of them; unsigned files and unknown signers are rejected. |
-| `pgp_encrypt` | Encrypts for `recipients` (armored public keys) and adds `.pgp`. |
-| `copy` | Saves the file to a storage. The key can use `{account}`, `{folder}`, `{date}`, `{time}`, `{filename}` and `{job_id}`. |
-| `webhook` | POSTs JSON describing the upload and the copies made so far. With a `secret`, the body is signed in the `X-Sftpgate-Signature: sha256=<hex HMAC>` header. |
+| `check` | Rejects a file that breaks a rule: `min_size`, `max_size`, and `csv` (exact `header`, `min_rows`, `delimiter`; every row as wide as the header). Only reads the file. |
+| `pgp_decrypt` | Decrypts the file (armored or binary). Strips `.pgp`, `.gpg` or `.asc` from the name. With `signer_keys` (the partner's public keys), the file must also be signed by one of them. |
+| `pgp_encrypt` | Encrypts for `recipients` (armored public keys) and adds `.pgp`. Keys that can't encrypt are refused when the config loads. |
+| `copy` | Saves the file to a storage. The key can use `{account}`, `{folder}`, `{transfer}`, `{date}`, `{time}`, `{filename}` and `{job_id}`. |
+| `webhook` | POSTs JSON describing the file (`event` is `upload`, `download`, `push` or `pull`). With a `secret`, the body is signed in the `X-Sftpgate-Signature: sha256=<hex HMAC>` header. Optional `headers` for the receiver's own auth. |
 
-Jobs wait in a queue on disk (`<spool_dir>/queue`), so they survive restarts.
-A failed job is retried with a growing wait (30s, 1m, 2m and so on, up to 1h).
-After `max_attempts` it moves to `queue/failed`. To run it again, move its file
-back into `queue`. A job can run more than once, so webhook receivers should
-ignore a `job_id` they have already seen.
+| Hook | Where | Runs | When an action fails |
+|---|---|---|---|
+| `before_upload` | folder | `check` | The upload is refused and nothing is stored. The reason is in the audit log and in the SFTP status message, but most clients only show a generic failure (see the onboarding guide). |
+| `after_upload` | folder | any | Retried in the background |
+| `after_download` | folder | any | Retried. Runs once the partner has the whole file. |
+| `before_push` | push transfer | `check`, `pgp_encrypt` | The file isn't sent, stays where it is, and the run fails |
+| `after_push` | push transfer | any (only `webhook` with `after: delete`) | Retried |
+| `before_pull` | pull transfer | `check` | The file isn't stored or deleted on their side, and the run fails |
+| `after_pull` | pull transfer | any | Retried |
+
+Actions of `after_*` hooks wait in a queue on disk (`<spool_dir>/queue`), so
+they survive restarts. A failed job is retried with a growing wait (30s, 1m, 2m
+and so on, up to 1h). After `server.queue.max_attempts` it moves to
+`queue/failed`; a failed `check` gives up at once, since retrying can't fix the
+file. To run a job again, move its file back into `queue`. A job can run more
+than once, so webhook receivers should ignore a `job_id` they've already seen.
+
+The older `on_upload:` list of steps still works, as another way to write
+`hooks.after_upload`.
 
 ## Scheduled transfers
 
@@ -137,7 +160,7 @@ git-sync as a sidecar sharing an `emptyDir` with SFTPgate in the same way.
 ## Web UI and API
 
 A read-only web page and JSON API show open sessions, recent events, the
-post-upload queue and the running config. They are off until you set tokens:
+action queue and the running config. They are off until you set tokens:
 
 ```yaml
 http:
@@ -152,7 +175,7 @@ send `Authorization: Bearer <token>`.
 | `GET /api/v1/status` | version, uptime, config hash, readiness, session and queue counts |
 | `GET /api/v1/sessions` | open sessions with bytes moved |
 | `GET /api/v1/events?event=&account=&result=&limit=` | the newest audit events kept in memory (up to 2000) |
-| `GET /api/v1/actions` | post-upload jobs waiting and failed |
+| `GET /api/v1/actions` | action jobs waiting and failed |
 | `GET /api/v1/config` | the config file as written (secrets only as references) |
 
 Nothing can be changed here. There are only GET routes; changes go through git.
@@ -165,7 +188,7 @@ Ready-to-use files you can copy into your own setup:
 
 - [`deploy/helm/sftpgate/files/alerts.yml`](deploy/helm/sftpgate/files/alerts.yml):
   alerts for the server being down, login failure spikes, blocked IPs, storage
-  errors, rejected config reloads, a low spool disk and failing post-upload actions.
+  errors, rejected config reloads, a low spool disk and failing actions.
 - [`deploy/helm/sftpgate/files/dashboard.json`](deploy/helm/sftpgate/files/dashboard.json):
   a dashboard with sessions, uploads, downloads, logins, traffic per account,
   transfer times, storage errors, denied requests and the running config version.
@@ -177,7 +200,7 @@ to send OpenTelemetry traces over OTLP/HTTP. All the other standard `OTEL_*`
 variables work too. Without it, tracing is off and costs nothing.
 
 Each session is one trace with a span per upload, download and file command.
-Post-upload jobs get their own trace, linked to the upload, and webhooks
+Action jobs get their own trace, linked to the upload or transfer, and webhooks
 carry a `traceparent` header so the receiver can continue the trace. Audit
 lines include `trace_id`. Spans never contain file names or object keys,
 because tracing tools are often less locked down than audit logs.
@@ -227,7 +250,7 @@ helm install sftpgate deploy/helm/sftpgate -n sftpgate -f my-values.yaml
 ```
 
 The chart runs a StatefulSet, so each pod gets its own disk for the spool and
-the post-upload queue, behind a LoadBalancer that keeps partners' real IPs. It
+the action queue, behind a LoadBalancer that keeps partners' real IPs. It
 supports secrets as env vars or files, git-sync, ServiceMonitor and
 PrometheusRule, a Grafana dashboard ConfigMap, an Ingress for the UI, and
 several replicas (scheduled transfers then run on the first pod only). See

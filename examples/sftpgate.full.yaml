@@ -81,6 +81,16 @@ server:
     window: 10m
     block: 15m
 
+  # How the actions of after_* hooks (see actions: below) run in the
+  # background. Each file becomes a job on disk, so jobs survive a restart.
+  queue:
+    # Jobs processed at the same time. Default 4.
+    workers: 4
+    # Tries before a job is marked failed (alert fires). Default 8.
+    max_attempts: 8
+    # Wait before the first retry; it doubles after every failure. Default 30s.
+    backoff: 30s
+
   # Time zone for {date} and {time} in keys, and for transfer schedules.
   # Default UTC.
   timezone: Asia/Kolkata
@@ -116,16 +126,81 @@ storages:
   onprem: "s3://landing?endpoint=https://minio.internal.acme.in&region=us-east-1&use_path_style=true"
 
 # -----------------------------------------------------------------------------
-# actions: how post-upload work (on_upload below) runs
+# actions: named, reusable work done on files
 # -----------------------------------------------------------------------------
+# Define each action once, with a name. Folders and transfers then run actions
+# by name from their hooks (see "hooks:" below), in the order listed.
+#
+# Each action is exactly one of these kinds:
+#   check        reject a file that doesn't look right (only reads it)
+#   pgp_decrypt  decrypt it (the next actions get the plain file)
+#   pgp_encrypt  encrypt it for someone's public key (adds ".pgp" to the name)
+#   copy         save it to a storage under a key you choose
+#   webhook      tell another service about it (HTTP POST, signed JSON)
+#
+# The hooks, and what they may run:
+#   on a folder (a partner connects to us):
+#     before_upload   check only. A failed check refuses the upload and the
+#                     partner sees the reason. Nothing is stored.
+#     after_upload    any action, in the background, with retries
+#     after_download  any action, once the partner has fetched the whole file
+#   on a push transfer (we send to a partner):
+#     before_push     check, pgp_encrypt. What's left is what gets sent; a file
+#                     that fails stays where it is and the run fails.
+#     after_push      any action (only webhook with after: delete)
+#   on a pull transfer (we fetch from a partner):
+#     before_pull     check only. A file that fails isn't stored.
+#     after_pull      any action
+# The original file is never changed: actions only write new files.
 actions:
-  # Jobs processed at the same time. Default 4.
-  workers: 4
-  # Tries before a job is marked failed (shown in the UI, alert fires).
-  # Default 8.
-  max_attempts: 8
-  # Wait before the first retry; it doubles after every failure. Default 30s.
-  backoff: 30s
+  # check: every rule is optional, but a check needs at least one.
+  settlement-csv:
+    check:
+      min_size: 100              # bytes, or 1KiB, 5MiB...
+      max_size: 200MiB
+      csv:
+        # The first row must be exactly these columns.
+        header: [settlement_id, payment_id, amount, fee, settled_at]
+        # At least this many rows after the header.
+        min_rows: 1
+        # One character. Default ",". Every row must have as many columns
+        # as the header.
+        delimiter: ","
+
+  # pgp_decrypt: decrypt with OUR private key.
+  decrypt-razorpay:
+    pgp_decrypt:
+      key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
+      passphrase: "${env:RECON_PGP_PASSPHRASE}"
+      # Optional: accept only files SIGNED by these keys (proves the file
+      # really came from Razorpay).
+      signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
+
+  # pgp_encrypt: only the holder of the matching private key can open it.
+  encrypt-for-auditor:
+    pgp_encrypt:
+      recipients: ["${file:/etc/sftpgate/secrets/auditor.pub.asc}"]
+
+  # copy: key placeholders are {account} {folder} {transfer} {date} {time}
+  # {filename} {job_id}. {date} and {time} use server.timezone.
+  archive-copy:
+    copy:
+      storage: archive
+      key: "{account}{transfer}/{date}/{time}-{filename}"
+
+  # webhook: an HTTP POST with JSON describing the file. With a secret, the
+  # body is signed (header X-Sftpgate-Signature: sha256=<HMAC-SHA256>), so
+  # the receiver can check the call really came from SFTPgate. Answer 2xx;
+  # anything else is retried. A job can run twice, so ignore a job_id you
+  # already saw.
+  notify-recon:
+    webhook:
+      url: "https://recon.internal.acme.in/hooks/sftpgate"
+      secret: "${env:RECON_WEBHOOK_SECRET}"
+      # Optional extra headers, for a receiver with its own auth. Headers
+      # that carry secrets (auth, token, key...) must be references.
+      headers:
+        Authorization: "${env:RECON_API_TOKEN}"
 
 # -----------------------------------------------------------------------------
 # accounts: who can log in, and what they can see and do
@@ -185,35 +260,19 @@ accounts:
         # so keep it close to real file sizes.
         max_file_size: 500MiB
 
-        # Work done automatically after EVERY upload into this folder, in this
-        # order. It runs in the background with retries; the uploaded file
-        # itself is never changed.
-        on_upload:
-          # 1. Decrypt the PGP file. The result is passed to the next step.
-          - pgp_decrypt:
-              # Our private key, which can decrypt.
-              key: "${file:/etc/sftpgate/secrets/recon-private.asc}"
-              passphrase: "${env:RECON_PGP_PASSPHRASE}"
-              # Optional: accept only files SIGNED by these keys (proves the
-              # file really came from Razorpay).
-              signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
-          # 2. Copy the result into another bucket.
-          #    Key placeholders: {account} {folder} {date} {time} {filename} {job_id}
-          - copy:
-              storage: archive
-              key: "razorpay/{date}/{filename}"
-          # 3. Tell your own service a file has arrived (HTTP POST with JSON).
-          #    The body is signed with this secret (HMAC-SHA256) so your
-          #    service can check the call really came from SFTPgate.
-          - webhook:
-              url: "https://recon.internal.acme.in/hooks/sftpgate"
-              secret: "${env:RECON_WEBHOOK_SECRET}"
+        # Actions to run, by name, at each point (see actions: above).
+        hooks:
+          # The files arrive encrypted, so the check runs after decrypting.
+          after_upload: [decrypt-razorpay, settlement-csv, archive-copy, notify-recon]
 
       # A second folder for the same partner: reports for them to download.
       - path: /outbound
         storage: reports
         prefix: razorpay/
         perms: [list, download, delete]
+        hooks:
+          # Tell the recon service once Razorpay has fetched a report.
+          after_download: [notify-recon]
 
   # ---- A partner that only downloads, logging in with a key ----
   - name: gst-partner
@@ -237,14 +296,11 @@ accounts:
         storage: onprem
         prefix: finance/
         perms: [list, upload, overwrite, rename, mkdir]
-        on_upload:
-          # Encrypt for the auditor before archiving. Only the auditor's
-          # private key can open the copy.
-          - pgp_encrypt:
-              recipients: ["${file:/etc/sftpgate/secrets/auditor.pub.asc}"]
-          - copy:
-              storage: archive
-              key: "finance/{date}/{time}-{filename}.pgp"
+        hooks:
+          # Refuse a broken CSV straight away, with the reason.
+          before_upload: [settlement-csv]
+          # Then archive a copy only the auditor can open.
+          after_upload: [encrypt-for-auditor, archive-copy]
 
 # -----------------------------------------------------------------------------
 # remotes: OTHER SFTP servers that SFTPgate connects to (for transfers below)
@@ -287,6 +343,11 @@ transfers:
       # true = delete the file on their server once it's safely in our bucket.
       # Default false.
       delete_after: false
+    hooks:
+      # Each file is checked before it's stored; a bad one is left on their
+      # server and the run fails (alert fires).
+      before_pull: [settlement-csv]
+      after_pull: [notify-recon]
 
   # PUSH: send files FROM our bucket TO a remote server.
   - name: bank-payouts
@@ -302,3 +363,8 @@ transfers:
       #   delete           delete it from our bucket
       #   move:<prefix>    move it, e.g. to a "sent" folder, so it's never sent twice
       after: "move:payouts/sent/"
+    hooks:
+      # Check each file, then encrypt it for the bank: they receive
+      # <name>.pgp. A file that fails stays in the outbox.
+      before_push: [settlement-csv, encrypt-for-auditor]
+      after_push: [notify-recon]

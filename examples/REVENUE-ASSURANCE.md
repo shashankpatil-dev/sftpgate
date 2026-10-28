@@ -291,5 +291,26 @@ A restart between runs loses nothing: files simply wait in `gst/outbox/`.
 |---|---|
 | EY prefers to **fetch** the files themselves | an `accounts:` entry for EY with a folder on `ra-gst` prefix `gst/outbox/` and `perms: [list, download]`, and `service.sftp.type: LoadBalancer` in `values.yaml` |
 | EY **sends files back** (acknowledgements) to their server | a second transfer with `pull:` from `ey` `/outgoing` into `ra-gst` key `gst/acks/{date}/{filename}` |
-| revenue-assurance must be **told** when an ack arrives | have partners upload into a folder with `on_upload: - webhook: {url: http://revenue-assurance/hooks/sftp, …}` |
-| Files must be **encrypted** for EY with PGP | encrypt before writing to the outbox, or have them uploaded through a folder with `on_upload: - pgp_encrypt` then `copy` into `gst/outbox/` |
+| revenue-assurance must be **told** when an ack arrives, or when a file reached EY | a `webhook` action, run from the pull's `hooks: { after_pull: [notify-ra] }` or the push's `hooks: { after_push: [notify-ra] }` |
+| Files must be **encrypted** for EY with PGP | a `pgp_encrypt` action with EY's public key, in `hooks: { before_push: [encrypt-ey] }`. EY receives `<name>.pgp`; your outbox keeps the plain file. |
+| A broken GST file must **never** be sent | a `check` action (size, CSV header, rows) first in `before_push`. A file that fails stays in the outbox, and the run fails so `SftpgateTransferFailing` fires. |
+
+For example, check, encrypt and notify:
+
+```yaml
+actions:
+  gst-csv:    { check: { min_size: 100, csv: { header: [gstin, invoice_no, invoice_date, taxable_value], min_rows: 1 } } }
+  encrypt-ey: { pgp_encrypt: { recipients: ["${file:/etc/sftpgate/secrets/ey/ey-pgp.pub.asc}"] } }
+  notify-ra:  { webhook: { url: "http://revenue-assurance.revenue-assurance.svc.cluster.local:8080/internal/sftp/events", secret: "${env:RA_WEBHOOK_SECRET}" } }
+
+transfers:
+  - name: gst-to-ey
+    schedule: "0 10,18 * * *"
+    push:
+      from: { storage: ra-gst, prefix: gst/outbox/, pattern: "*" }
+      to: { remote: ey, path: /incoming }
+      after: "move:gst/sent/"
+    hooks:
+      before_push: [gst-csv, encrypt-ey]
+      after_push: [notify-ra]
+```

@@ -66,24 +66,27 @@ SFTPgate only holds a file for the few seconds it takes to arrive completely.
 
 | Feature | What it saves you |
 |---|---|
+| **Checks** on every file (size, CSV header, rows, columns), before it's stored or sent | A broken report is refused at the door instead of breaking reconciliation later |
 | **PGP decrypt**, with optional signature check | No more scripts decrypting bank files; unsigned or forged files are rejected |
 | **PGP encrypt** | Files encrypted for a recipient before they're stored or sent |
 | **Copy** to another bucket, with names like `razorpay/2026-10-24/file.csv` | Files sorted into your data lake or warehouse automatically |
-| **Webhook** to your systems, signed | Your reconciliation or GST systems know the moment a file arrives |
+| **Webhook** to your systems, signed | Your systems know the moment a file is uploaded, downloaded, pushed or pulled |
 | **Scheduled pull** from a partner's SFTP server | "Fetch the bank statements every morning at 6" with no cron scripts |
 | **Scheduled push** to a partner's SFTP server | "Send prepared payout files every 30 minutes, then archive them" |
 
-Post-upload steps are **retried automatically** with growing waits, survive
+Each is a named **action** defined once and run from the **hooks** of any folder
+or transfer (before or after an upload, download, push or pull). Actions of
+"after" hooks are **retried automatically** with growing waits, survive
 restarts, and are visible in the UI and alerts if they give up.
 
 ### Seeing what's happening
 - **Read-only web UI** (`/ui/`): open sessions, recent events with filters,
-  post-upload jobs, and the running config and its git commit. It has no edit
+  action jobs, and the running config and its git commit. It has no edit
   buttons, by design.
 - **JSON API** (`/api/v1/`): the same data for scripts and other tools.
 - **Grafana dashboard** (19 panels): logins, connections, uploads and downloads
   per partner, data moved, transfer times, storage errors, denied requests,
-  post-upload jobs, scheduled transfers, and the config version.
+  action jobs, scheduled transfers, and the config version.
 - **Tracing (optional):** each session and upload as a timeline in Jaeger,
   Tempo or Datadog, continued into your webhook receivers.
 
@@ -102,15 +105,15 @@ Prometheus Operator usually has one already).
 | `SftpgateStorageErrors` | A bucket is failing |
 | `SftpgateConfigReloadFailed` | A new config was rejected (the old one keeps running) |
 | `SftpgateSpoolDiskLow` | The upload disk is getting full |
-| `SftpgateActionsRetrying` | Post-upload steps are failing and being retried |
-| `SftpgateActionsGaveUp` | A post-upload job gave up |
+| `SftpgateActionsRetrying` | Actions are failing and being retried |
+| `SftpgateActionsGaveUp` | An action job gave up |
 | `SftpgateActionsNotQueued` | A file was saved but its steps couldn't be queued |
 | `SftpgateTransferFailing` | A scheduled transfer failed in the last hour |
 
 ## 4. What security and compliance get
 
 - **An audit trail.** One JSON line for every connection, login (and failed
-  login), upload, download, delete, rename, post-upload job, transfer and config
+  login), upload, download, delete, rename, action job, transfer and config
   change: who, what, when, from which IP, and the result. Send it to a
   retention-locked bucket and it can't be altered.
 - **Layered access checks,** in this order:
@@ -153,7 +156,7 @@ Prometheus Operator usually has one already).
 | Health | `http://<host>:8080/healthz`, `/readyz` |
 | Audit log | the container's output (`docker logs`, `kubectl logs`, or your log system) |
 | Dashboard and alerts | `deploy/helm/sftpgate/files/` (installed by Helm with `metrics.*` values) |
-| Failed post-upload jobs | `<spool_dir>/queue/failed/` on the SFTPgate disk, and the UI's Actions page |
+| Failed action jobs | `<spool_dir>/queue/failed/` on the SFTPgate disk, and the UI's Actions page |
 
 ## 7. What SFTPgate deliberately does not do
 

@@ -260,6 +260,11 @@ config: |
     tokens: ["${env:SFTPGATE_UI_TOKEN}"]
   storages:
     main: "gs://acme-sftp-exchange"
+  actions:
+    decrypt-razorpay:
+      pgp_decrypt:
+        key: "${file:/etc/sftpgate/secrets/recon/private.asc}"
+        signer_keys: ["${file:/etc/sftpgate/secrets/recon/razorpay-signing.pub.asc}"]
   accounts:
     - name: razorpay
       auth:
@@ -272,10 +277,8 @@ config: |
           storage: main
           prefix: razorpay/inbound/
           perms: [list, upload]
-          on_upload:
-            - pgp_decrypt:
-                key: "${file:/etc/sftpgate/secrets/recon/private.asc}"
-                signer_keys: ["${file:/etc/sftpgate/secrets/recon/razorpay-signing.pub.asc}"]
+          hooks:
+            after_upload: [decrypt-razorpay]
 
 # Secrets as env vars, for ${env:...}
 secretEnv: [sftpgate-secrets]
@@ -493,8 +496,8 @@ version: 1              # required, always 1
 server: {...}           # how the SFTP server behaves
 http: {...}             # metrics, health, UI and API
 storages: {...}         # your buckets
+actions: {...}          # named actions (check, PGP, copy, webhook)
 accounts: [...]         # partner and service logins
-actions: {...}          # how post-upload steps run
 remotes: {...}          # other SFTP servers, for scheduled transfers
 transfers: [...]        # scheduled pulls and pushes
 ```
@@ -574,7 +577,8 @@ library rejects. Give Paramiko partners `mode: any` with a key instead.
 | `perms` | (required) | Any of `list`, `download`, `upload`, `overwrite`, `delete`, `rename`, `mkdir` |
 | `patterns` | empty (any name) | Allowed file names, like `["*.csv", "*.csv.pgp"]` |
 | `max_file_size` | `0` (no limit) | Largest file allowed; also the space reserved per upload |
-| `on_upload` | empty | Steps to run after each upload, see 8.7 |
+| `hooks` | empty | Actions to run, by name: `before_upload`, `after_upload`, `after_download`. See 8.7 |
+| `on_upload` | empty | The older way to write `hooks.after_upload`, with the steps in place. Still works; not together with `hooks.after_upload`. |
 
 Typical folder setups:
 
@@ -587,10 +591,75 @@ Typical folder setups:
 - { path: /drop,     storage: main, prefix: p/drop/, perms: [list, upload, overwrite, rename] }
 ```
 
-### 8.7 `on_upload` steps
+### 8.7 `actions` and `hooks`
 
-A list; each item is exactly **one** step. They run in order, after the file is
-safely saved. The uploaded file itself is never changed.
+**Actions** are defined once, by name, under the top-level `actions:`. Each is
+exactly **one** kind. **Hooks** on folders and transfers then list action names,
+which run in that order. The original file is never changed: actions work on a
+copy and write new files.
+
+```yaml
+actions:
+  recon-csv: { check: { csv: { header: [id, amount], min_rows: 1 } } }
+  notify:    { webhook: { url: "https://recon.internal/hooks/sftpgate", secret: "${env:RECON_HOOK_SECRET}" } }
+
+accounts:
+  - name: razorpay
+    folders:
+      - path: /inbound
+        storage: main
+        perms: [list, upload]
+        hooks:
+          before_upload: [recon-csv]
+          after_upload: [notify]
+```
+
+**The hooks:**
+
+| Hook | On | Runs | When an action fails |
+|---|---|---|---|
+| `before_upload` | folder | `check` only, while the partner waits | The upload is refused, nothing is stored. The reason goes to the partner's client and the audit log (`result: denied`). |
+| `after_upload` | folder | any action, in the background | Retried; after `max_attempts` the job moves to `queue/failed` |
+| `after_download` | folder | any action, once the partner has the whole file | Retried |
+| `before_push` | push transfer | `check`, `pgp_encrypt`. What's left is what gets sent. | The file isn't sent, stays in place, and the run fails (alert) |
+| `after_push` | push transfer | any action (only `webhook` with `after: delete`, since the file is gone) | Retried |
+| `before_pull` | pull transfer | `check` only | The file isn't stored, isn't deleted on their side, and the run fails |
+| `after_pull` | pull transfer | any action | Retried |
+
+"Before" hooks only check (or, for a push, encrypt), because something is
+waiting on them. A failed `check` in an `after_*` hook gives up at once: retrying
+can't fix the file, and the actions after it don't run.
+
+**What a partner sees when a check refuses a file.** SFTP can only refuse a file
+when the client closes it, and most clients don't show the server's message
+then:
+
+| Client | Shows |
+|---|---|
+| Go `pkg/sftp` | the reason, e.g. `upload rejected: CSV header is ["name"], expected ["id" "amount"]` |
+| OpenSSH `sftp` | `Failure` |
+| PuTTY `psftp` (the engine of WinSCP and FileZilla) | `error while closing: failure` |
+| Paramiko | ignores errors on close; with its default `confirm=True` the upload then fails with "no such file" |
+
+The file is never stored either way, and the audit log always has the reason
+(`event: upload`, `result: denied`). When you onboard a partner, tell them that
+a refused upload means "fix the file and send it again", and ask Paramiko users
+to keep `confirm=True` (the default). The same holds for any upload refused at
+close, such as a storage error.
+
+#### The kinds of action
+
+**`check`:** reject a file that doesn't look right. It only reads the file. At
+least one rule:
+
+| Setting | What it does |
+|---|---|
+| `min_size`, `max_size` | Size limits, like `100` or `5MiB` |
+| `csv.header` | The first row must be exactly these columns. A spreadsheet byte-order mark is ignored. |
+| `csv.min_rows` | At least this many rows after the first one |
+| `csv.delimiter` | One character; default `,` |
+
+With `csv`, every row must have as many columns as the first one.
 
 **`pgp_decrypt`:** decrypt with your private key.
 
@@ -604,14 +673,14 @@ safely saved. The uploaded file itself is never changed.
 
 | Setting | What it does |
 |---|---|
-| `recipients` | Armored public keys of who may read the file. Adds `.pgp` to the name. |
+| `recipients` | Armored public keys of who may read the file. Adds `.pgp` to the name. A key that can't encrypt (sign-only, expired) is refused when the config loads. |
 
 **`copy`:** save the current file to a storage.
 
 | Setting | What it does |
 |---|---|
 | `storage` | Target storage name |
-| `key` | Target name, with placeholders: `{account}`, `{folder}`, `{date}`, `{time}`, `{filename}`, `{job_id}` |
+| `key` | Target name, with placeholders: `{account}`, `{folder}`, `{transfer}`, `{date}`, `{time}`, `{filename}`, `{job_id}` |
 
 **`webhook`:** tell another system.
 
@@ -619,6 +688,10 @@ safely saved. The uploaded file itself is never changed.
 |---|---|
 | `url` | `https://...` (or `http://` inside your network) |
 | `secret` | **Reference** to a shared secret; the body is signed in `X-Sftpgate-Signature: sha256=<hex>` |
+| `headers` | Extra headers, for a receiver with its own auth. Headers whose name contains auth, token, key, secret or cookie must be references. `Content-Type`, `User-Agent` and `X-Sftpgate-*` can't be set. |
+
+A hook with only webhooks doesn't download the file; it checks the SHA-256
+stored with it instead, so a replaced file is never announced.
 
 What the webhook receives (POST, JSON):
 
@@ -633,34 +706,36 @@ What the webhook receives (POST, JSON):
   "filename": "settlement.csv.pgp",
   "size": 10482,
   "sha256": "ab12...",
+  "time": "2026-10-24T07:58:12Z",
   "uploaded": "2026-10-24T07:58:12Z",
   "copies": [{ "storage": "warehouse", "key": "razorpay/2026-10-24/settlement.csv" }]
 }
 ```
 
+- **`event`** is `upload`, `download`, `push` or `pull`.
+- For transfers, `transfer`, `remote` and `remote_path` are set, and `account`
+  and `folder` are empty. For a push, `key` is where the file is now (for
+  example in `sent/`) and `remote_path` is the name the partner got.
+- `uploaded` holds the same time as `time`, for receivers written for v0.3.
+- `sha256` can be empty for a pushed file that no action read.
+
 To check the signature, compute HMAC-SHA256 of the raw body with the secret and
 compare it with the header. Ignore a `job_id` you've already handled, because a
-retry can send it twice. Answer with any 2xx status; anything else is retried.
+retry can send it twice. Answer with any 2xx status within 10 seconds; anything
+else is retried.
 
-Example: decrypt, check the signature, archive, notify:
+### 8.8 `server.queue`
 
-```yaml
-on_upload:
-  - pgp_decrypt:
-      key: "${file:/etc/sftpgate/secrets/recon/private.asc}"
-      passphrase: "${env:RECON_PGP_PASSPHRASE}"
-      signer_keys: ["${file:/etc/sftpgate/secrets/recon/razorpay-signing.pub.asc}"]
-  - copy: { storage: warehouse, key: "razorpay/{date}/{filename}" }
-  - webhook: { url: "https://recon.internal/hooks/sftpgate", secret: "${env:RECON_HOOK_SECRET}" }
-```
-
-### 8.8 `actions`
+How the actions of `after_*` hooks run in the background.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `workers` | `4` | Post-upload jobs running at the same time |
+| `workers` | `4` | Jobs running at the same time |
 | `max_attempts` | `8` | Tries before a job gives up and moves to `queue/failed` |
 | `backoff` | `30s` | First wait before a retry; doubles each time, up to 1 hour |
+
+Up to v0.3 these were under a top-level `actions:`. An old file now gets a clear
+error saying where each setting moved.
 
 ### 8.9 `remotes`
 

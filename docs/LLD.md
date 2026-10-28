@@ -79,6 +79,18 @@ No CLI framework (stdlib `flag`), no logging library (`log/slog`), no web framew
 
 ### 3.1 Full schema (annotated)
 
+> **As built in v0.4: actions and hooks.** The `on_upload` design below was
+> generalized. Actions are defined once under a top-level `actions:` map
+> (`check`, `pgp_decrypt`, `pgp_encrypt`, `copy`, `webhook`) and listed by name
+> in `hooks:` on folders (`before_upload`, `after_upload`, `after_download`)
+> and transfers (`before_push`/`after_push`, `before_pull`/`after_pull`). The
+> queue settings moved from `actions:` to `server.queue:`. `on_upload` still
+> works as another way to write `hooks.after_upload`. "Before" hooks run
+> synchronously through `actions.Runner.Before` (checks, plus `pgp_encrypt`
+> before a push); "after" hooks queue a job carrying its hook and, for
+> transfers, the transfer name. Reference: `docs/ONBOARDING.md` 8.7 and
+> `examples/sftpgate.full.yaml`.
+
 ```yaml
 version: 1                                   # required, must be 1
 
