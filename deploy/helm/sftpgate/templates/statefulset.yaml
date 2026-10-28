@@ -159,7 +159,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- if not .Values.persistence.enabled }}
-        # Without persistence, queued post-upload actions are lost when the pod restarts.
+        # Without persistence, queued actions are lost when the pod restarts.
         - { name: data, emptyDir: {} }
         {{- end }}
       {{- with .Values.nodeSelector }}

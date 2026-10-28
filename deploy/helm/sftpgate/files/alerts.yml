@@ -61,21 +61,21 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Post-upload actions are failing and being retried. Check the "action" lines in the audit log.
+          summary: Actions are failing and being retried. Check the "action" lines in the audit log.
 
       - alert: SftpgateActionsGaveUp
         expr: sftpgate_actions_queue_depth{state="failed"} > 0
         labels:
           severity: critical
         annotations:
-          summary: "{{ $value }} post-upload job(s) gave up. Their files are in the bucket but were not processed; see the queue/failed folder."
+          summary: "{{ $value }} action job(s) gave up. Their files are in the bucket but were not processed; see the queue/failed folder."
 
       - alert: SftpgateActionsNotQueued
         expr: sum(increase(sftpgate_actions_total{step="queue", result="failed"}[5m])) > 0
         labels:
           severity: critical
         annotations:
-          summary: Files were saved but their post-upload actions could not be queued (spool disk full or not writable).
+          summary: Files were saved but their after_* actions could not be queued (spool disk full or not writable).
 
       - alert: SftpgateTransferFailing
         expr: sum by (transfer) (increase(sftpgate_transfer_runs_total{result="failed"}[1h])) > 0

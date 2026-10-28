@@ -160,7 +160,7 @@ What each part does:
 | `-p 127.0.0.1:8080:8080` | Metrics, health checks and the UI, on the server itself only. Put a firewall or VPN in front before opening it further. |
 | `-v .../config:...:ro` | The config **folder**, read-only. A folder, not the file, so edits are seen (hot reload). |
 | `-v .../keys:...:ro` | The host key. |
-| `-v sftpgate-data:/var/lib/sftpgate` | The spool and the post-upload queue. Keep it, or queued work is lost. |
+| `-v sftpgate-data:/var/lib/sftpgate` | The spool and the action queue. Keep it, or queued work is lost. |
 | `--read-only --tmpfs /tmp` | Lock the container's own files; give it a scratch `/tmp`. |
 | `--env-file secrets.env` | Secrets for `${env:...}` references, one `NAME=value` per line, file readable by root only. |
 

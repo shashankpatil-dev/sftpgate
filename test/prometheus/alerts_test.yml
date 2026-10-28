@@ -114,7 +114,7 @@ tests:
         alertname: SftpgateIPsBlocked
         exp_alerts: []
 
-  - name: post-upload actions retrying, then giving up
+  - name: actions retrying, then giving up
     interval: 1m
     input_series:
       - series: 'sftpgate_actions_total{step="job", result="failed"}'
@@ -130,13 +130,13 @@ tests:
         exp_alerts:
           - exp_labels: { severity: warning }
             exp_annotations:
-              summary: Post-upload actions are failing and being retried. Check the "action" lines in the audit log.
+              summary: Actions are failing and being retried. Check the "action" lines in the audit log.
       - eval_time: 3m
         alertname: SftpgateActionsGaveUp
         exp_alerts:
           - exp_labels: { severity: critical, state: failed }
             exp_annotations:
-              summary: "1 post-upload job(s) gave up. Their files are in the bucket but were not processed; see the queue/failed folder."
+              summary: "1 action job(s) gave up. Their files are in the bucket but were not processed; see the queue/failed folder."
 
   - name: actions that could not be queued
     interval: 1m
@@ -149,7 +149,7 @@ tests:
         exp_alerts:
           - exp_labels: { severity: critical }
             exp_annotations:
-              summary: Files were saved but their post-upload actions could not be queued (spool disk full or not writable).
+              summary: Files were saved but their after_* actions could not be queued (spool disk full or not writable).
 
   - name: a failing scheduled transfer is named
     interval: 1m

@@ -778,7 +778,7 @@
     {
       "id": 15,
       "type": "timeseries",
-      "title": "Post-upload actions per minute",
+      "title": "Actions per minute",
       "description": "Each PGP, copy and webhook step. step=queue counts files handed to the queue.",
       "datasource": {
         "type": "prometheus",
@@ -827,7 +827,7 @@
     {
       "id": 16,
       "type": "timeseries",
-      "title": "Post-upload queue",
+      "title": "Action queue",
       "description": "pending: waiting to run or to retry. failed: gave up after max_attempts; their files are in queue/failed.",
       "datasource": {
         "type": "prometheus",
