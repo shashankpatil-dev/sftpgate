@@ -36,8 +36,9 @@ func (h *Handler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 		return nil, h.finish(e, t, err)
 	}
 
-	_, span := h.startSpan("sftp.download", t)
-	return &download{h: h, t: t, event: e, size: attrs.Size, start: time.Now(), span: span}, nil
+	ctx, span := h.startSpan("sftp.download", t)
+	return &download{h: h, t: t, event: e, size: attrs.Size, sha: attrs.Metadata["sftpgate-sha256"],
+		start: time.Now(), ctx: ctx, span: span}, nil
 }
 
 // download is one file being sent to the client.
@@ -53,7 +54,10 @@ type download struct {
 	t     *target
 	event audit.Event
 	size  int64
+	// sha is the SHA-256 stored with the file when SFTPgate saved it, if any.
+	sha   string
 	start time.Time
+	ctx   context.Context
 	span  trace.Span
 
 	mu      sync.Mutex
@@ -184,5 +188,11 @@ func (d *download) Close() error {
 	d.h.record(e, d.t, d.failed)
 	d.span.SetAttributes(attribute.Int64("sftpgate.size", d.sent))
 	tracing.End(d.span, d.failed)
+
+	// Only a download that reached the end counts: a client that stops
+	// halfway didn't get the file. Re-read pieces can push sent past size.
+	if d.failed == nil && d.sent >= d.size {
+		d.h.enqueue(d.ctx, config.AfterDownload, d.t, d.size, d.sha)
+	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,44 +45,89 @@ type Copied struct {
 	Key     string `json:"key"`
 }
 
-// runSteps downloads the uploaded file and runs every step of its folder.
-// The uploaded file itself is never changed: steps only write new files.
+// runSteps runs the actions of the job's hook on a copy of the file. The file
+// itself is never changed: actions only write new files.
 func (r *Runner) runSteps(ctx context.Context, job Job) error {
 	cfg := r.Config()
-	acc := cfg.Account(job.Account)
-	if acc == nil || acc.Folder(job.Folder) == nil {
-		return permanent("folder %s of account %s is no longer in the config", job.Folder, job.Account)
+	steps, err := stepsFor(cfg, job)
+	if err != nil {
+		return err
 	}
-	folder := acc.Folder(job.Folder)
-	bucket := r.Buckets.Bucket(cfg, job.Storage)
-	if bucket == nil {
+	if r.Buckets.Bucket(cfg, job.Storage) == nil {
 		return permanent("storage %s is no longer in the config", job.Storage)
 	}
 
 	cur := &current{job: job, cfg: cfg, filename: job.Filename}
 	defer cur.cleanup()
 
-	if err := r.download(ctx, cur); err != nil {
+	// A webhook only sends the file's details, so a hook with only webhooks
+	// checks the stored SHA-256 instead of downloading the file.
+	switch {
+	case slices.ContainsFunc(steps, func(s *config.Step) bool { return s.Webhook == nil }):
+		err = r.download(ctx, cur)
+	case job.SHA256 != "":
+		err = r.unchanged(ctx, cur)
+	}
+	if err != nil {
 		return err
 	}
-	for _, step := range folder.OnUpload {
-		stepCtx, span := tracing.Tracer.Start(ctx, "action."+step.Name())
-		err := r.runStep(stepCtx, step, cur)
-		tracing.End(span, err)
-		result := audit.OK
-		if err != nil {
-			result = audit.Failed
-		}
-		metrics.Actions.WithLabelValues(step.Name(), result).Inc()
-		if err != nil {
+
+	for _, step := range steps {
+		if err := r.traced(ctx, step, cur); err != nil {
 			return fmt.Errorf("%s: %w", step.Name(), err)
 		}
 	}
 	return nil
 }
 
+// stepsFor finds the actions of the job's hook in the current config, so a
+// changed action applies to jobs already in the queue.
+func stepsFor(cfg *config.Config, job Job) ([]*config.Step, error) {
+	if job.Transfer != "" {
+		t := cfg.Transfer(job.Transfer)
+		if t == nil {
+			return nil, permanent("transfer %s is no longer in the config", job.Transfer)
+		}
+		return t.Hooks.Steps(job.hook()), nil
+	}
+	acc := cfg.Account(job.Account)
+	if acc == nil || acc.Folder(job.Folder) == nil {
+		return nil, permanent("folder %s of account %s is no longer in the config", job.Folder, job.Account)
+	}
+	return acc.Folder(job.Folder).Hooks.Steps(job.hook()), nil
+}
+
+// Before runs the actions of a "before" hook on a local file right away,
+// while the upload or transfer waits. It returns the file to use from then
+// on (pgp_encrypt makes a new one), its name, and a function that removes
+// the temporary files. A failed check returns a *Rejected error.
+func (r *Runner) Before(ctx context.Context, steps []*config.Step, path, filename string) (string, string, func(), error) {
+	cur := &current{path: path, filename: filename}
+	for _, step := range steps {
+		if err := r.traced(ctx, step, cur); err != nil {
+			return "", "", cur.cleanup, err
+		}
+	}
+	return cur.path, cur.filename, cur.cleanup, nil
+}
+
+// traced runs one action in its own span and counts the result.
+func (r *Runner) traced(ctx context.Context, step *config.Step, cur *current) error {
+	ctx, span := tracing.Tracer.Start(ctx, "action."+step.Name())
+	err := r.runStep(ctx, step, cur)
+	tracing.End(span, err)
+	result := audit.OK
+	if err != nil {
+		result = audit.Failed
+	}
+	metrics.Actions.WithLabelValues(step.Name(), result).Inc()
+	return err
+}
+
 func (r *Runner) runStep(ctx context.Context, step *config.Step, cur *current) error {
 	switch {
+	case step.Check != nil:
+		return checkFile(cur.path, step.Check)
 	case step.PGPDecrypt != nil:
 		return r.decrypt(cur, step.PGPDecrypt)
 	case step.PGPEncrypt != nil:
@@ -94,8 +140,9 @@ func (r *Runner) runStep(ctx context.Context, step *config.Step, cur *current) e
 	return permanent("unknown step")
 }
 
-// download fetches the uploaded file into a temp file and checks that it is
-// still the exact file that was uploaded.
+// download fetches the file into a temp file and checks that it is still
+// the exact file the job was made for. When that isn't known (a file pushed
+// to a partner, or one SFTPgate didn't store), its SHA-256 is worked out.
 func (r *Runner) download(ctx context.Context, cur *current) error {
 	bucket := r.Buckets.Bucket(cur.cfg, cur.job.Storage)
 	rd, err := bucket.NewReader(ctx, cur.job.Key, nil)
@@ -114,11 +161,29 @@ func (r *Runner) download(ctx context.Context, cur *current) error {
 	if _, err := io.Copy(io.MultiWriter(f, h), rd); err != nil {
 		return err
 	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != cur.job.SHA256 {
+	got := hex.EncodeToString(h.Sum(nil))
+	switch cur.job.SHA256 {
+	case "":
+		cur.job.SHA256 = got
+	case got:
+	default:
 		return permanent("the file in the bucket changed after it was uploaded (sha256 %s, expected %s)", got, cur.job.SHA256)
 	}
 	cur.path = f.Name()
 	return f.Close()
+}
+
+// unchanged makes sure the file is still the one the job was made for, from
+// the SHA-256 that SFTPgate stores with every file it saves.
+func (r *Runner) unchanged(ctx context.Context, cur *current) error {
+	attrs, err := r.Buckets.Bucket(cur.cfg, cur.job.Storage).Attributes(ctx, cur.job.Key)
+	if err != nil {
+		return err
+	}
+	if got := attrs.Metadata["sftpgate-sha256"]; got != cur.job.SHA256 {
+		return permanent("the file in the bucket changed after it was uploaded (sha256 %q, expected %s)", got, cur.job.SHA256)
+	}
+	return nil
 }
 
 // decrypt replaces the current file with its decrypted contents. Both
@@ -219,6 +284,18 @@ func (r *Runner) encrypt(cur *current, e *config.PGPEncrypt) error {
 	return out.Close()
 }
 
+// OutName returns the name a file gets after the steps run: each
+// pgp_encrypt adds ".pgp". Transfers use it to look for a file the partner
+// already has without encrypting it first.
+func OutName(steps []*config.Step, name string) string {
+	for _, s := range steps {
+		if s.PGPEncrypt != nil {
+			name += ".pgp"
+		}
+	}
+	return name
+}
+
 // copy saves the current file to another storage under a templated key.
 // Running it twice writes the same key again, so retries are safe.
 func (r *Runner) copy(ctx context.Context, cur *current, c *config.Copy) error {
@@ -251,22 +328,42 @@ func (r *Runner) copy(ctx context.Context, cur *current, c *config.Copy) error {
 
 // WebhookPayload is the JSON body a webhook receives.
 type WebhookPayload struct {
-	Event    string    `json:"event"`
-	JobID    string    `json:"job_id"`
-	Account  string    `json:"account"`
-	Folder   string    `json:"folder"`
-	Storage  string    `json:"storage"`
-	Key      string    `json:"key"`
-	Filename string    `json:"filename"`
-	Size     int64     `json:"size"`
-	SHA256   string    `json:"sha256"`
+	// Event is what happened: upload, download, push or pull.
+	Event string `json:"event"`
+	JobID string `json:"job_id"`
+
+	// Account and Folder are set for uploads and downloads, Transfer,
+	// Remote and RemotePath for pushes and pulls.
+	Account    string `json:"account"`
+	Folder     string `json:"folder"`
+	Transfer   string `json:"transfer,omitempty"`
+	Remote     string `json:"remote,omitempty"`
+	RemotePath string `json:"remote_path,omitempty"`
+
+	Storage  string `json:"storage"`
+	Key      string `json:"key"`
+	Filename string `json:"filename"`
+	Size     int64  `json:"size"`
+	SHA256   string `json:"sha256"`
+
+	// Time is when the event happened. Uploaded holds the same time, under
+	// the name older receivers expect.
+	Time     time.Time `json:"time"`
 	Uploaded time.Time `json:"uploaded"`
 
 	// Copies lists the files made by copy steps that ran before this webhook.
 	Copies []Copied `json:"copies"`
 }
 
-// webhook posts the upload details as JSON.
+// hookEvents names the event a webhook reports for each after_* hook.
+var hookEvents = map[string]string{
+	config.AfterUpload:   "upload",
+	config.AfterDownload: "download",
+	config.AfterPush:     "push",
+	config.AfterPull:     "pull",
+}
+
+// webhook posts the file's details as JSON.
 //
 // With a secret, the body is signed: X-Sftpgate-Signature is
 // "sha256=" + hex(HMAC-SHA256(secret, body)). A job can run more than once
@@ -274,17 +371,21 @@ type WebhookPayload struct {
 func (r *Runner) webhook(ctx context.Context, cur *current, w *config.Webhook) error {
 	job := cur.job
 	body, err := json.Marshal(WebhookPayload{
-		Event:    "upload",
-		JobID:    job.ID,
-		Account:  job.Account,
-		Folder:   job.Folder,
-		Storage:  job.Storage,
-		Key:      job.Key,
-		Filename: job.Filename,
-		Size:     job.Size,
-		SHA256:   job.SHA256,
-		Uploaded: job.Uploaded,
-		Copies:   append([]Copied{}, cur.copies...),
+		Event:      hookEvents[job.hook()],
+		JobID:      job.ID,
+		Account:    job.Account,
+		Folder:     job.Folder,
+		Transfer:   job.Transfer,
+		Remote:     job.Remote,
+		RemotePath: job.RemotePath,
+		Storage:    job.Storage,
+		Key:        job.Key,
+		Filename:   job.Filename,
+		Size:       job.Size,
+		SHA256:     job.SHA256,
+		Time:       job.Uploaded,
+		Uploaded:   job.Uploaded,
+		Copies:     append([]Copied{}, cur.copies...),
 	})
 	if err != nil {
 		return err
@@ -293,6 +394,10 @@ func (r *Runner) webhook(ctx context.Context, cur *current, w *config.Webhook) e
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
 	if err != nil {
 		return permanent("bad webhook URL: %v", err)
+	}
+	// Custom headers first, so they can never replace SFTPgate's own.
+	for name, value := range w.Headers {
+		req.Header.Set(name, value)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "SFTPgate")
@@ -330,6 +435,7 @@ func (cur *current) vars() map[string]string {
 	return map[string]string{
 		"account":  cur.job.Account,
 		"folder":   strings.TrimPrefix(cur.job.Folder, "/"),
+		"transfer": cur.job.Transfer,
 		"date":     t.Format("2006-01-02"),
 		"time":     t.Format("150405"),
 		"filename": cur.filename,

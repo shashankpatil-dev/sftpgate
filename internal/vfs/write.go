@@ -147,6 +147,10 @@ func (u *upload) Close() error {
 		tracing.End(u.span, u.failed)
 		return u.failed
 	}
+	if err := u.before(); err != nil {
+		tracing.End(u.span, err)
+		return u.h.finish(e, u.t, err)
+	}
 
 	_, write := tracing.Tracer.Start(u.ctx, "storage.write")
 	sha, err := storage.PutFile(context.Background(), u.t.bucket, u.t.key, u.file, size, storage.PutOptions{
@@ -173,33 +177,26 @@ func (u *upload) Close() error {
 	u.h.BytesIn.Add(size)
 	metrics.TransferDuration.WithLabelValues("in").Observe(time.Since(u.start).Seconds())
 	u.h.record(e, u.t, nil)
-	u.afterUpload(sha)
+	u.h.enqueue(u.ctx, config.AfterUpload, u.t, size, sha)
 	return nil
 }
 
-// afterUpload hands the saved file to the post-upload actions, if the folder
-// has any. The file is already safe in the bucket, so a failure here is
-// logged and counted but not reported to the client.
-func (u *upload) afterUpload(sha string) {
-	if len(u.t.folder.OnUpload) == 0 || u.h.AfterUpload == nil {
-		return
+// before runs the folder's before_upload checks on the finished spool file.
+// A failed check refuses the upload, and nothing is saved.
+func (u *upload) before() error {
+	steps := u.t.folder.Hooks.Steps(config.BeforeUpload)
+	if len(steps) == 0 {
+		return nil
 	}
-	err := u.h.AfterUpload(Uploaded{
-		Account:  u.h.Account.Name,
-		Folder:   u.t.folder.Path,
-		Storage:  u.t.folder.Storage,
-		Key:      u.t.key,
-		Filename: path.Base(u.t.rel),
-		Size:     u.size.Load(),
-		SHA256:   sha,
-		Time:     time.Now(),
-
-		TraceParent: tracing.Inject(u.ctx),
-	})
-	if err != nil {
-		slog.Error("could not queue post-upload actions", "key", u.t.key, "err", err)
-		metrics.Actions.WithLabelValues("queue", "failed").Inc()
+	// Never skip a check silently: without a way to run it, refuse the file.
+	if u.h.Before == nil {
+		return errors.New("before_upload checks can't run")
 	}
+	_, _, cleanup, err := u.h.Before(u.ctx, steps, u.file.Name(), path.Base(u.t.rel))
+	if cleanup != nil {
+		cleanup()
+	}
+	return err
 }
 
 // discardSpool closes and deletes the spool file. A file left behind would

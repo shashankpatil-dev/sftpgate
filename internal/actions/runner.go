@@ -1,8 +1,9 @@
-// Package actions runs a folder's post-upload steps (PGP, copy, webhook)
-// after a file has been saved to the bucket.
+// Package actions runs the named actions of folder and transfer hooks:
+// check, pgp_decrypt, pgp_encrypt, copy and webhook.
 //
-// Every saved file becomes a job: a small JSON file in the queue folder on
-// disk. Workers pick jobs up, run the steps, and delete the job file when
+// "Before" hooks run right away, while the upload or transfer waits (see
+// Runner.Before). After_* hooks run in the background: every file becomes a
+// job, a small JSON file in the queue folder on disk. Workers pick jobs up, run the steps, and delete the job file when
 // everything worked. A failed job is retried later with a growing wait, and
 // after max_attempts it is moved to the queue's "failed" folder. Because the
 // queue lives on disk, jobs survive a restart.
@@ -37,11 +38,20 @@ import (
 // maxBackoff is the longest wait between two attempts of one job.
 const maxBackoff = time.Hour
 
-// Job is one saved file whose folder has post-upload steps.
+// Job is one file whose after_* hook has actions to run.
 type Job struct {
-	ID        string    `json:"id"`
-	Account   string    `json:"account"`
-	Folder    string    `json:"folder"`
+	ID string `json:"id"`
+
+	// Hook is the hook whose actions run. Jobs queued before hooks existed
+	// have none, and they are after_upload jobs.
+	Hook string `json:"hook,omitempty"`
+
+	Account    string `json:"account,omitempty"`
+	Folder     string `json:"folder,omitempty"`
+	Transfer   string `json:"transfer,omitempty"`
+	Remote     string `json:"remote,omitempty"`
+	RemotePath string `json:"remote_path,omitempty"`
+
 	Storage   string    `json:"storage"`
 	Key       string    `json:"key"`
 	Filename  string    `json:"filename"`
@@ -100,19 +110,23 @@ func NewRunner(dir, workDir string, cfg func() *config.Config, buckets *storage.
 	}, nil
 }
 
-// Add queues the post-upload steps for a saved file.
-func (r *Runner) Add(u vfs.Uploaded) error {
+// Add queues the actions of a file's after_* hook.
+func (r *Runner) Add(u vfs.FileEvent) error {
 	job := Job{
-		ID:       newJobID(u.Time),
-		Account:  u.Account,
-		Folder:   u.Folder,
-		Storage:  u.Storage,
-		Key:      u.Key,
-		Filename: u.Filename,
-		Size:     u.Size,
-		SHA256:   u.SHA256,
-		Uploaded: u.Time,
-		NextAt:   u.Time,
+		ID:         newJobID(u.Time),
+		Hook:       u.Hook,
+		Account:    u.Account,
+		Folder:     u.Folder,
+		Transfer:   u.Transfer,
+		Remote:     u.Remote,
+		RemotePath: u.RemotePath,
+		Storage:    u.Storage,
+		Key:        u.Key,
+		Filename:   u.Filename,
+		Size:       u.Size,
+		SHA256:     u.SHA256,
+		Uploaded:   u.Time,
+		NextAt:     u.Time,
 
 		TraceParent: u.TraceParent,
 	}
@@ -133,7 +147,7 @@ func (r *Runner) Add(u vfs.Uploaded) error {
 func (r *Runner) Run(ctx context.Context) {
 	jobs := make(chan Job)
 	var wg sync.WaitGroup
-	for range r.Config().Actions.Workers {
+	for range r.Config().Server.Queue.Workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -264,21 +278,24 @@ func (r *Runner) process(ctx context.Context, job Job) {
 		trace.WithLinks(trace.Link{SpanContext: tracing.Extract(job.TraceParent)}),
 		trace.WithAttributes(
 			attribute.String("sftpgate.job", job.ID),
+			attribute.String("sftpgate.hook", job.hook()),
 			attribute.String("sftpgate.account", job.Account),
 			attribute.String("sftpgate.folder", job.Folder),
+			attribute.String("sftpgate.transfer", job.Transfer),
 			attribute.Int("sftpgate.attempt", job.Attempt+1),
 		))
 	err := r.runSteps(ctx, job)
 	tracing.End(span, err)
 
 	ev := audit.Event{
-		Event:   "action",
-		Account: job.Account,
-		Storage: job.Storage,
-		Key:     job.Key,
-		Job:     job.ID,
-		TraceID: tracing.TraceID(ctx),
-		Result:  audit.OK,
+		Event:    "action",
+		Account:  job.Account,
+		Transfer: job.Transfer,
+		Storage:  job.Storage,
+		Key:      job.Key,
+		Job:      job.ID,
+		TraceID:  tracing.TraceID(ctx),
+		Result:   audit.OK,
 	}
 
 	if err == nil {
@@ -300,13 +317,15 @@ func (r *Runner) process(ctx context.Context, job Job) {
 	ev.Result, ev.Error = audit.Failed, err.Error()
 	metrics.Actions.WithLabelValues("job", audit.Failed).Inc()
 
+	// Retrying can't fix a removed folder or a file that fails its check.
 	var permanent *permanentError
-	giveUp := errors.As(err, &permanent) || job.Attempt >= r.Config().Actions.MaxAttempts
+	var rejected *Rejected
+	giveUp := errors.As(err, &permanent) || errors.As(err, &rejected) || job.Attempt >= r.Config().Server.Queue.MaxAttempts
 	if giveUp {
 		ev.Error += " (gave up; job moved to failed)"
 		r.moveToFailed(job)
 	} else {
-		job.NextAt = r.Now().Add(backoff(r.Config().Actions.Backoff, job.Attempt))
+		job.NextAt = r.Now().Add(backoff(r.Config().Server.Queue.Backoff, job.Attempt))
 		if err := r.save(job, r.jobPath(job.ID)); err != nil {
 			slog.Error("could not save job for retry", "job", job.ID, "err", err)
 		}
@@ -330,6 +349,14 @@ func backoff(base time.Duration, attempt int) time.Duration {
 		wait *= 2
 	}
 	return min(wait, maxBackoff)
+}
+
+// hook returns the job's hook, after_upload for jobs from before hooks existed.
+func (j Job) hook() string {
+	if j.Hook == "" {
+		return config.AfterUpload
+	}
+	return j.Hook
 }
 
 func (r *Runner) jobPath(id string) string {

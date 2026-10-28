@@ -109,7 +109,7 @@ func newHarness(t *testing.T, edit func(string) string) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.srv.AfterUpload = runner.Add
+	h.srv.Enqueue, h.srv.Before = runner.Add, runner.Before
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

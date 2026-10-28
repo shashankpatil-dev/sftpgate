@@ -33,6 +33,7 @@ type Transfer struct {
 	Schedule string `yaml:"schedule"`
 	Pull     *Pull  `yaml:"pull"`
 	Push     *Push  `yaml:"push"`
+	Hooks    Hooks  `yaml:"hooks"`
 }
 
 // Pull copies new files from a remote folder into a storage.
@@ -144,8 +145,16 @@ func (c *checker) transfers(cfg *Config) {
 			c.fail(p, "needs exactly one of pull or push")
 		case t.Pull != nil:
 			c.pull(p+".pull", t.Pull, cfg)
+			c.hooks(p, &t.Hooks, []string{BeforePull, AfterPull}, cfg)
 		default:
 			c.push(p+".push", t.Push, cfg)
+			c.hooks(p, &t.Hooks, []string{BeforePush, AfterPush}, cfg)
+			// A deleted file can't be read again, so only webhooks can follow.
+			for i, s := range t.Hooks.Steps(AfterPush) {
+				if t.Push.After == "delete" && s.Webhook == nil {
+					c.fail(fmt.Sprintf("%s.hooks.after_push[%d]", p, i), "with after: delete the file is gone once sent; only webhook actions can run")
+				}
+			}
 		}
 	}
 }

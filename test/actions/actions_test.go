@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,18 +37,37 @@ const (
 	hookSecret = "hook test secret"
 )
 
-// configTemplate has three folders, each with its own steps.
+// configTemplate defines named actions and folders that run them from their
+// hooks. The last folder uses the older on_upload form, which must still work.
 const configTemplate = `
 version: 1
 server:
   host_keys: [HOST_KEY_FILE]
   timezone: Asia/Kolkata
+  queue: { max_attempts: 3, backoff: 1m }
 storages:
   raw: mem://raw
   out: mem://out
 actions:
-  max_attempts: 3
-  backoff: 1m
+  decrypt:
+    pgp_decrypt: { key: "${file:PRIVATE_KEY_FILE}", passphrase: "${env:PGP_PASS}" }
+  decrypt-signed:
+    pgp_decrypt:
+      key: "${file:PRIVATE_KEY_FILE}"
+      passphrase: "${env:PGP_PASS}"
+      signer_keys: ["${file:SIGNER_KEY_FILE}"]
+  encrypt:
+    pgp_encrypt: { recipients: ["${file:PUBLIC_KEY_FILE}"] }
+  plain-copy:
+    copy: { storage: out, key: "plain/{account}/{date}/{filename}" }
+  enc-copy:
+    copy: { storage: out, key: "encrypted/{folder}/{filename}" }
+  verified-copy:
+    copy: { storage: out, key: "verified/{filename}" }
+  recon-csv:
+    check: { csv: { header: [id, amount], min_rows: 1 } }
+  notify:
+    webhook: { url: "HOOK_URL", secret: "${env:HOOK_SECRET}", headers: { X-Team: recon } }
 accounts:
   - name: acme
     auth: { public_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"] }
@@ -55,33 +76,33 @@ accounts:
         storage: raw
         prefix: in/
         perms: [upload]
-        on_upload:
-          - pgp_decrypt: { key: "${file:PRIVATE_KEY_FILE}", passphrase: "${env:PGP_PASS}" }
-          - copy: { storage: out, key: "plain/{account}/{date}/{filename}" }
-          - webhook: { url: "HOOK_URL", secret: "${env:HOOK_SECRET}" }
+        hooks: { after_upload: [decrypt, plain-copy, notify] }
       - path: /enc
         storage: raw
         prefix: enc/
         perms: [upload]
-        on_upload:
-          - pgp_encrypt: { recipients: ["${file:PUBLIC_KEY_FILE}"] }
-          - copy: { storage: out, key: "encrypted/{folder}/{filename}" }
+        hooks: { after_upload: [encrypt, enc-copy] }
+      - path: /signed
+        storage: raw
+        prefix: signed/
+        perms: [upload]
+        hooks: { after_upload: [decrypt-signed, verified-copy] }
+      - path: /checked
+        storage: raw
+        prefix: checked/
+        perms: [upload]
+        hooks: { after_upload: [decrypt, recon-csv, plain-copy] }
+      - path: /out
+        storage: raw
+        prefix: out/
+        perms: [download]
+        hooks: { after_download: [notify] }
       - path: /hook
         storage: raw
         prefix: hook/
         perms: [upload]
         on_upload:
           - webhook: { url: "HOOK_URL" }
-      - path: /signed
-        storage: raw
-        prefix: signed/
-        perms: [upload]
-        on_upload:
-          - pgp_decrypt:
-              key: "${file:PRIVATE_KEY_FILE}"
-              passphrase: "${env:PGP_PASS}"
-              signer_keys: ["${file:SIGNER_KEY_FILE}"]
-          - copy: { storage: out, key: "verified/{filename}" }
 `
 
 // env is one runner with in-memory buckets and a fake webhook receiver.
@@ -153,8 +174,8 @@ func (e *env) upload(folder, filename string, data []byte) {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	err = e.runner.Add(vfs.Uploaded{
-		Account: "acme", Folder: folder, Storage: "raw", Key: key,
+	err = e.runner.Add(vfs.FileEvent{
+		Hook: config.AfterUpload, Account: "acme", Folder: folder, Storage: "raw", Key: key,
 		Filename: filename, Size: int64(len(data)), SHA256: sha, Time: e.now,
 	})
 	if err != nil {
@@ -516,6 +537,7 @@ type hookServer struct {
 type hookCall struct {
 	body      []byte
 	signature string
+	header    http.Header
 }
 
 func newHookServer(t *testing.T) *hookServer {
@@ -524,7 +546,7 @@ func newHookServer(t *testing.T) *hookServer {
 		body, _ := io.ReadAll(r.Body)
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		h.received = append(h.received, hookCall{body: body, signature: r.Header.Get("X-Sftpgate-Signature")})
+		h.received = append(h.received, hookCall{body: body, signature: r.Header.Get("X-Sftpgate-Signature"), header: r.Header.Clone()})
 		if h.failsLeft > 0 {
 			h.failsLeft--
 			http.Error(w, "try later", http.StatusInternalServerError)
@@ -544,4 +566,179 @@ func (h *hookServer) calls() []hookCall {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]hookCall{}, h.received...)
+}
+
+// A check in an after_* hook runs on the decrypted file. Retrying can't fix a
+// bad file, so the job gives up at once, and nothing after the check runs.
+func TestCheckInAfterHook(t *testing.T) {
+	e := newEnv(t)
+	e.upload("/checked", "good.csv.pgp", encrypt(t, e.entity, "id,amount\n1,100\n"))
+	e.upload("/checked", "bad.csv.pgp", encrypt(t, e.entity, "id,amount\n"))
+	e.runner.RunDue(context.Background())
+
+	if _, ok := e.read(e.out, "plain/acme/2026-10-25/good.csv"); !ok {
+		t.Fatal("a file that passes its check must be copied")
+	}
+	if _, ok := e.read(e.out, "plain/acme/2026-10-25/bad.csv"); ok {
+		t.Fatal("actions after a failed check must not run")
+	}
+	job := onlyJob(t, e.queued("failed"))
+	if job.Attempt != 1 || !strings.Contains(job.LastError, "check: CSV has 0 rows after the header") {
+		t.Fatalf("failed job = %+v", job)
+	}
+}
+
+// A hook with only webhooks doesn't download the file, but still refuses to
+// announce one that was replaced. after_download reports event "download",
+// and custom headers are sent.
+func TestWebhookOnlyHook(t *testing.T) {
+	e := newEnv(t)
+	sha, err := storage.PutFile(context.Background(), e.raw, "out/report.csv", strings.NewReader("data"), 4, storage.PutOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.runner.Add(vfs.FileEvent{
+		Hook: config.AfterDownload, Account: "acme", Folder: "/out", Storage: "raw",
+		Key: "out/report.csv", Filename: "report.csv", Size: 4, SHA256: sha, Time: e.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.runner.RunDue(context.Background())
+
+	calls := e.hook.calls()
+	if len(calls) != 1 {
+		t.Fatalf("webhook calls = %d, want 1", len(calls))
+	}
+	var p actions.WebhookPayload
+	_ = json.Unmarshal(calls[0].body, &p)
+	if p.Event != "download" || p.Folder != "/out" || p.SHA256 != sha || !p.Time.Equal(e.now) {
+		t.Fatalf("payload = %+v", p)
+	}
+	if calls[0].header.Get("X-Team") != "recon" || calls[0].signature == "" {
+		t.Fatalf("headers = %v", calls[0].header)
+	}
+}
+
+// Before runs a before_* hook right away: checks pass or reject with a
+// reason, and pgp_encrypt hands back a new file and name.
+func TestBefore(t *testing.T) {
+	e := newEnv(t)
+	cfg := e.cfg.Load()
+	steps := []*config.Step{cfg.Actions["recon-csv"], cfg.Actions["encrypt"]}
+	good := filepath.Join(e.dir, "good.csv")
+	writeFile(t, good, []byte("id,amount\n1,100\n"))
+
+	out, name, cleanup, err := e.runner.Before(context.Background(), steps, good, "good.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "good.csv.pgp" || name != actions.OutName(steps, "good.csv") {
+		t.Fatalf("name = %q", name)
+	}
+	enc, _ := os.ReadFile(out)
+	md, err := openpgp.ReadMessage(bytes.NewReader(enc), openpgp.EntityList{e.entity}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, _ := io.ReadAll(md.UnverifiedBody); string(plain) != "id,amount\n1,100\n" {
+		t.Fatalf("decrypts to %q", plain)
+	}
+	cleanup()
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatal("cleanup must remove the encrypted copy")
+	}
+	if b, _ := os.ReadFile(good); string(b) != "id,amount\n1,100\n" {
+		t.Fatal("the original file must not change")
+	}
+
+	bad := filepath.Join(e.dir, "bad.csv")
+	writeFile(t, bad, []byte("name\nx\n"))
+	_, _, cleanup, err = e.runner.Before(context.Background(), steps, bad, "bad.csv")
+	cleanup()
+	var rej *actions.Rejected
+	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, `CSV header is ["name"], expected ["id" "amount"]`) {
+		t.Fatalf("err = %v, want a rejection with the reason", err)
+	}
+}
+
+// Each rule of a check, on its own.
+func TestCheckRules(t *testing.T) {
+	e := newEnv(t)
+	csvCheck := func(c config.CSVCheck) *config.Check { return &config.Check{CSV: &c} }
+	cases := []struct {
+		name  string
+		check *config.Check
+		data  string
+		want  string // "" means the file passes
+	}{
+		{"min size ok", &config.Check{MinSize: 3}, "abc", ""},
+		{"too small", &config.Check{MinSize: 4}, "abc", "below the minimum of 4"},
+		{"too big", &config.Check{MaxSize: 2}, "abc", "above the maximum of 2"},
+		{"header ok", csvCheck(config.CSVCheck{Header: []string{"id", "amount"}}), "id,amount\n", ""},
+		{"spreadsheet BOM", csvCheck(config.CSVCheck{Header: []string{"id", "amount"}}), "\ufeffid,amount\n1,2\n", ""},
+		{"wrong header", csvCheck(config.CSVCheck{Header: []string{"id", "amount"}}), "id,total\n", "CSV header is"},
+		{"enough rows", csvCheck(config.CSVCheck{MinRows: 2}), "h\n1\n2\n", ""},
+		{"too few rows", csvCheck(config.CSVCheck{MinRows: 2}), "h\n1\n", "1 rows after the header, expected at least 2"},
+		{"ragged row", csvCheck(config.CSVCheck{}), "a,b\n1,2\n3\n", "wrong number of fields"},
+		{"empty file", csvCheck(config.CSVCheck{}), "", "file is empty"},
+		{"delimiter", csvCheck(config.CSVCheck{Header: []string{"id", "amount"}, Delimiter: ";"}), "id;amount\n1;2\n", ""},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := filepath.Join(e.dir, fmt.Sprintf("check-%d", i))
+			writeFile(t, f, []byte(tc.data))
+			_, _, cleanup, err := e.runner.Before(context.Background(), []*config.Step{{Check: tc.check}}, f, "f.csv")
+			cleanup()
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("want pass, got %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// Jobs queued by v0.3.0 have no hook. After an upgrade they still run, as
+// after_upload jobs.
+func TestJobFromOlderVersion(t *testing.T) {
+	e := newEnv(t)
+	e.upload("/hook", "a.csv", []byte("x"))
+	f := e.queued("")[0]
+	var job map[string]any
+	b, _ := os.ReadFile(f)
+	_ = json.Unmarshal(b, &job)
+	delete(job, "hook")
+	b, _ = json.Marshal(job)
+	writeFile(t, f, b)
+
+	e.runner.RunDue(context.Background())
+	if len(e.hook.calls()) != 1 || len(e.queued("")) != 0 {
+		t.Fatal("an older job must run as after_upload")
+	}
+}
+
+// A key that can only sign can't be encrypted for. The config is refused
+// when it loads, not when a transfer tries to send.
+func TestSignOnlyRecipientRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeKeys(t, dir)
+	signOnly := newPGPEntity(t)
+	signOnly.Subkeys = nil
+	writeFile(t, filepath.Join(dir, "sign-only.asc"), armored(t, openpgp.PublicKeyType, signOnly.Serialize))
+	t.Setenv("PGP_PASS", passphrase)
+	t.Setenv("HOOK_SECRET", hookSecret)
+
+	src := strings.NewReplacer(
+		"HOST_KEY_FILE", filepath.Join(dir, "host_key"),
+		"PRIVATE_KEY_FILE", filepath.Join(dir, "private.asc"),
+		"PUBLIC_KEY_FILE", filepath.Join(dir, "sign-only.asc"),
+		"SIGNER_KEY_FILE", filepath.Join(dir, "public.asc"),
+		"HOOK_URL", "https://hooks.example.com/x",
+	).Replace(configTemplate)
+	_, err := config.Parse([]byte(src), config.Options{})
+	if err == nil || !strings.Contains(err.Error(), "actions.encrypt.pgp_encrypt.recipients: key") || !strings.Contains(err.Error(), "no usable encryption key") {
+		t.Fatalf("want a sign-only recipient refused, got %v", err)
+	}
 }

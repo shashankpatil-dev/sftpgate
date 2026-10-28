@@ -337,3 +337,117 @@ func TestSourceHashSeesReferencedFiles(t *testing.T) {
 		t.Fatal("rotating a referenced file must change the hash")
 	}
 }
+
+func TestHooksValidation(t *testing.T) {
+	setHash(t)
+	t.Setenv("HOOK_AUTH", "Bearer abc")
+	key := hostKeyFile(t)
+	// The folder and both transfers use named actions through their hooks.
+	valid := `
+actions:
+  recon-csv: { check: { min_size: 1KiB, csv: { header: [id, amount], min_rows: 1 } } }
+  encrypt-ey: { pgp_encrypt: { recipients: ["${env:TEST_PW_HASH}"] } }
+  archive: { copy: { storage: raw, key: "archive/{transfer}/{date}/{filename}" } }
+  notify: { webhook: { url: "https://recon.example/hook", headers: { Authorization: "${env:HOOK_AUTH}", X-Team: recon } } }
+remotes:
+  bank:
+    addr: sftp.bank.example:22
+    user: acme
+    host_key: "` + testPubKey + `"
+    password: "${env:TEST_PW_HASH}"
+transfers:
+  - name: statements
+    schedule: "0 6 * * *"
+    pull:
+      from: { remote: bank, path: /out }
+      to: { storage: raw, key: "bank/{filename}" }
+    hooks: { before_pull: [recon-csv], after_pull: [archive, notify] }
+  - name: returns
+    schedule: "0 10 * * *"
+    push:
+      from: { storage: raw, prefix: outbox/ }
+      to: { remote: bank, path: /in }
+      after: "move:sent/"
+    hooks: { before_push: [recon-csv], after_push: [archive, notify] }
+`
+	folderHooks := "        max_file_size: 500MiB\n        hooks: { before_upload: [recon-csv], after_upload: [archive, notify], after_download: [notify] }"
+	src := strings.Replace(base(key), "        max_file_size: 500MiB", folderHooks, 1) + valid
+	// Offline: the encryption key reference has no real value to parse.
+	if _, err := config.Parse([]byte(src), config.Options{Offline: true}); err != nil {
+		t.Fatalf("valid hooks rejected: %v", err)
+	}
+
+	cases := []struct {
+		name, from, to, want string
+	}{
+		{"unknown action", "after_upload: [archive, notify]", "after_upload: [archive, nope]", `unknown action "nope"`},
+		{"webhook before upload", "before_upload: [recon-csv]", "before_upload: [notify]", "before_upload can't run notify (notify is a webhook)"},
+		{"copy before push", "before_push: [recon-csv]", "before_push: [archive]", "before_push can't run archive"},
+		{"encrypt before pull", "before_pull: [recon-csv]", "before_pull: [encrypt-ey]", "before_pull can't run encrypt-ey"},
+		{"push hook on a folder", "after_download: [notify]", "after_push: [notify]", "hooks.after_push: not available here"},
+		{"pull hook on a push", "before_push: [recon-csv]", "before_pull: [recon-csv]", "transfers[1].hooks.before_pull: not available here"},
+		{"copy after delete", `after: "move:sent/"`, `after: "delete"`, "only webhook actions can run"},
+		{"empty check", "recon-csv: { check: { min_size: 1KiB, csv: { header: [id, amount], min_rows: 1 } } }", "recon-csv: { check: {} }", "needs at least one of min_size, max_size, csv"},
+		{"min above max", "min_size: 1KiB,", "min_size: 2KiB, max_size: 1KiB,", "min_size is bigger than max_size"},
+		{"two kinds in one", "archive: { copy:", "archive: { webhook: { url: \"https://x\" }, copy:", "exactly one of"},
+		{"inline auth header", `Authorization: "${env:HOOK_AUTH}"`, `Authorization: "Bearer abc"`, "headers.Authorization: inline secret not allowed"},
+		{"reserved header", "X-Team: recon", "X-Sftpgate-Job: x", "set by SFTPgate"},
+		{"bad action name", "  notify: {", "  Notify!: {", "name must match"},
+		{"unknown placeholder", "{transfer}", "{partner}", "unknown placeholder {partner}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(src, tc.from) {
+				t.Fatalf("test setup: %q not found", tc.from)
+			}
+			bad := strings.Replace(src, tc.from, tc.to, 1)
+			if _, err := config.Parse([]byte(bad), config.Options{Offline: true}); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// Files written before named actions keep working, or say exactly what to change.
+func TestOlderActionSettings(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	onUpload := "        max_file_size: 500MiB\n        on_upload: [{ webhook: { url: \"https://x/hook\" } }]"
+	src := strings.Replace(base(key), "        max_file_size: 500MiB", onUpload, 1)
+
+	cfg, err := config.Parse([]byte(src), config.Options{})
+	if err != nil {
+		t.Fatalf("on_upload must still work: %v", err)
+	}
+	if steps := cfg.Account("razorpay").Folder("/inbound").Hooks.Steps(config.AfterUpload); len(steps) != 1 || steps[0].Webhook == nil {
+		t.Fatalf("on_upload should become after_upload, got %v", steps)
+	}
+
+	both := strings.Replace(src, "on_upload:", "hooks: { after_upload: [n] }\n        on_upload:", 1) + "actions:\n  n: { webhook: { url: \"https://x\" } }\n"
+	if _, err := config.Parse([]byte(both), config.Options{}); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("on_upload with hooks.after_upload: got %v", err)
+	}
+
+	queue := src + "actions:\n  workers: 2\n"
+	if _, err := config.Parse([]byte(queue), config.Options{}); err == nil || !strings.Contains(err.Error(), "actions.workers moved to server.queue.workers") {
+		t.Fatalf("old queue settings: got %v", err)
+	}
+}
+
+// A secret reused with a YAML alias is a reference at every place it is
+// used. It used to count as an inline secret everywhere but the first.
+func TestAliasedSecret(t *testing.T) {
+	setHash(t)
+	t.Setenv("HOOK_SECRET", "s3cret")
+	key := hostKeyFile(t)
+	src := strings.Replace(base(key), "        max_file_size: 500MiB",
+		"        max_file_size: 500MiB\n        on_upload: [{ webhook: &hook { url: \"https://x/hook\", secret: \"${env:HOOK_SECRET}\" } }]\n"+
+			"      - { path: /other, storage: raw, prefix: other, perms: [upload], on_upload: [{ webhook: *hook }] }", 1)
+	cfg, err := config.Parse([]byte(src), config.Options{})
+	if err != nil {
+		t.Fatalf("aliased secret rejected: %v", err)
+	}
+	if got := cfg.Account("razorpay").Folder("/other").Hooks.Steps(config.AfterUpload)[0].Webhook.Secret; got != "s3cret" {
+		t.Fatalf("aliased secret = %q", got)
+	}
+}

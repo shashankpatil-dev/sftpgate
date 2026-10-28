@@ -76,7 +76,8 @@ func serve(path string) error {
 	if err != nil {
 		return err
 	}
-	srv.AfterUpload = runner.Add
+	srv.Enqueue = runner.Add
+	srv.Before = runner.Before
 
 	ln, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
@@ -106,7 +107,9 @@ func serve(path string) error {
 
 	host, _ := os.Hostname()
 	if transfers.EnabledHere(os.Getenv, host) {
-		go transfers.NewScheduler(r.current.Load, buckets, cfg.Server.SpoolDir).Run(ctx)
+		sched := transfers.NewScheduler(r.current.Load, buckets, cfg.Server.SpoolDir)
+		sched.Before, sched.Enqueue = runner.Before, runner.Add
+		go sched.Run(ctx)
 	} else if len(cfg.Transfers) > 0 {
 		slog.Info("scheduled transfers run on another replica", "host", host)
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 )
 
 // configCheck is how often the scheduler looks for a reloaded config.
@@ -33,6 +34,14 @@ type Scheduler struct {
 
 	// WorkDir holds pulled files while they are checked and uploaded.
 	WorkDir string
+
+	// Before runs before_push and before_pull actions. Transfers with those
+	// hooks fail while it is nil.
+	Before vfs.BeforeFunc
+
+	// Enqueue queues after_push and after_pull actions. It may be nil, and
+	// then those hooks don't run.
+	Enqueue func(vfs.FileEvent) error
 
 	// Now returns the current time. Tests replace it.
 	Now func() time.Time

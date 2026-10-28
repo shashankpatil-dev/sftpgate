@@ -54,6 +54,7 @@ func validate(cfg *Config, refs map[string]bool, opt Options) error {
 	c.server(cfg)
 	c.httpTokens(cfg.HTTP.Tokens)
 	c.storages(cfg.Storages)
+	c.actions(cfg)
 
 	cfg.byName = map[string]*Account{}
 	for i, a := range cfg.Accounts {
@@ -95,8 +96,8 @@ func (c *checker) server(cfg *Config) {
 	}
 	cfg.Server.Location = loc
 
-	if cfg.Actions.Workers < 1 || cfg.Actions.MaxAttempts < 1 || cfg.Actions.Backoff <= 0 {
-		c.fail("actions", "workers, max_attempts and backoff must all be above zero")
+	if q := s.Queue; q.Workers < 1 || q.MaxAttempts < 1 || q.Backoff <= 0 {
+		c.fail("server.queue", "workers, max_attempts and backoff must all be above zero")
 	}
 }
 
@@ -161,7 +162,7 @@ func (c *checker) account(p string, a *Account, cfg *Config) {
 			c.fail(fp+".path", "duplicate folder %q", f.Path)
 		}
 		seen[f.Path] = true
-		c.folder(fp, f, cfg.Storages)
+		c.folder(fp, f, cfg)
 	}
 
 	// Worked out last, after the folder prefixes have been tidied up.
@@ -215,11 +216,11 @@ func (c *checker) auth(p string, a *Account) {
 	}
 }
 
-func (c *checker) folder(p string, f *Folder, storages map[string]string) {
+func (c *checker) folder(p string, f *Folder, cfg *Config) {
 	if !folderPathRe.MatchString(f.Path) {
 		c.fail(p+".path", "must be a single segment like /inbound")
 	}
-	if _, ok := storages[f.Storage]; !ok {
+	if _, ok := cfg.Storages[f.Storage]; !ok {
 		c.fail(p+".storage", "unknown storage %q", f.Storage)
 	}
 
@@ -252,7 +253,8 @@ func (c *checker) folder(p string, f *Folder, storages map[string]string) {
 		c.fail(p+".max_file_size", "must be 0 or more")
 	}
 
-	c.steps(p, f.OnUpload, storages)
+	c.hooks(p, &f.Hooks, []string{BeforeUpload, AfterUpload, AfterDownload}, cfg)
+	c.onUpload(p, f, cfg.Storages)
 }
 
 // prefixes parses a list of IPs and CIDR ranges. A single IP becomes a
@@ -294,9 +296,13 @@ func fingerprint(a *Account, storages map[string]string) string {
 	b, _ := yaml.Marshal(a)
 	h.Write(b)
 
+	// Named actions live outside the account, so their resolved contents
+	// are added: changing an action used here counts as changing the account.
 	var used []string
 	for _, f := range a.Folders {
 		used = append(used, f.Storage+"="+storages[f.Storage])
+		steps, _ := yaml.Marshal(f.Hooks.steps)
+		h.Write(steps)
 	}
 	sort.Strings(used)
 	h.Write([]byte(strings.Join(used, "\n")))

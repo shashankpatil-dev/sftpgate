@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -15,11 +16,13 @@ import (
 	"gocloud.dev/gcerrors"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/shashankpatil-dev/sftpgate/internal/actions"
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/sshalgo"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 )
 
 // dialTimeout is how long connecting and logging in to a remote may take.
@@ -72,11 +75,16 @@ func (r *run) pull() error {
 			continue
 		}
 
-		ev.SHA256, err = r.pullFile(client, remotePath, bucket, key, e.Size())
+		ev.SHA256, err = r.pullFile(client, remotePath, bucket, key, e.Name(), e.Size())
 		// Another run or pod stored it in the meantime: nothing to do.
 		if errors.Is(err, storage.ErrExists) {
 			r.count("skipped")
 			continue
+		}
+		if err == nil {
+			r.enqueue(config.AfterPull, vfs.FileEvent{
+				Storage: pl.To.Storage, Key: key, Filename: e.Name(), Size: e.Size(), SHA256: ev.SHA256, RemotePath: remotePath,
+			})
 		}
 		if err == nil && pl.DeleteAfter {
 			if err = client.Remove(remotePath); err != nil {
@@ -89,8 +97,8 @@ func (r *run) pull() error {
 }
 
 // pullFile downloads one remote file to the work folder, checks its size,
-// and uploads it to the bucket.
-func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Bucket, key string, size int64) (string, error) {
+// runs the before_pull checks, and uploads it to the bucket.
+func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Bucket, key, name string, size int64) (string, error) {
 	src, err := client.Open(remotePath)
 	if err != nil {
 		return "", err
@@ -114,6 +122,15 @@ func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Buck
 	// take it on the next run instead.
 	if n != size {
 		return "", fmt.Errorf("remote file changed while reading (%d bytes, expected %d)", n, size)
+	}
+	if steps := r.t.Hooks.Steps(config.BeforePull); len(steps) > 0 {
+		_, _, cleanup, err := r.before(steps, tmp.Name(), name)
+		if cleanup != nil {
+			cleanup()
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return storage.PutFile(r.ctx, bucket, key, tmp, n, storage.PutOptions{
@@ -150,7 +167,8 @@ func (r *run) push() error {
 			continue
 		}
 
-		remotePath := path.Join(ps.To.Path, name)
+		steps := r.t.Hooks.Steps(config.BeforePush)
+		remotePath := path.Join(ps.To.Path, actions.OutName(steps, name))
 		ev := audit.Event{Event: "transfer", Transfer: r.t.Name, Path: remotePath, Storage: ps.From.Storage, Key: obj.Key, Size: obj.Size}
 
 		if ps.After == "keep" {
@@ -160,13 +178,86 @@ func (r *run) push() error {
 			}
 		}
 
-		err = r.pushFile(client, bucket, obj.Key, remotePath)
+		err = r.send(client, bucket, obj.Key, name, remotePath, steps)
+		finalKey := obj.Key
 		if err == nil {
-			err = r.afterPush(bucket, obj.Key, name)
+			finalKey, err = r.afterPush(bucket, obj.Key, name)
+		}
+		if err == nil {
+			r.enqueue(config.AfterPush, vfs.FileEvent{
+				Storage: ps.From.Storage, Key: finalKey, Filename: name, Size: obj.Size, RemotePath: remotePath,
+			})
 		}
 		r.record(ev, err)
 	}
 	return r.summary()
+}
+
+// send pushes one object to the remote. With before_push actions, a local
+// copy is checked (and maybe encrypted) first, and that is what gets sent.
+// A file that fails a check isn't sent, and stays where it is.
+func (r *run) send(client *sftp.Client, bucket *blob.Bucket, key, name, remotePath string, steps []*config.Step) error {
+	src, err := bucket.NewReader(r.ctx, key, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+	if len(steps) == 0 {
+		return r.pushFile(client, src, remotePath)
+	}
+
+	tmp, err := os.CreateTemp(r.s.WorkDir, "xfer-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	_, err = io.Copy(tmp, src)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+
+	outPath, _, cleanup, err := r.before(steps, tmp.Name(), name)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		return err
+	}
+	out, err := os.Open(outPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	return r.pushFile(client, out, remotePath)
+}
+
+// before runs a before_* hook on a local copy of a file.
+func (r *run) before(steps []*config.Step, path, name string) (string, string, func(), error) {
+	if r.s.Before == nil {
+		return "", "", nil, errors.New("before hooks can't run")
+	}
+	return r.s.Before(r.ctx, steps, path, name)
+}
+
+// enqueue queues a file's after_* actions, if the transfer has any. The
+// file has already moved, so a failure is logged, not counted against it.
+func (r *run) enqueue(hook string, ev vfs.FileEvent) {
+	if len(r.t.Hooks.Steps(hook)) == 0 || r.s.Enqueue == nil {
+		return
+	}
+	ev.Hook, ev.Transfer, ev.Time = hook, r.t.Name, r.s.Now()
+	if r.t.Pull != nil {
+		ev.Remote = r.t.Pull.From.Remote
+	} else {
+		ev.Remote = r.t.Push.To.Remote
+	}
+	if err := r.s.Enqueue(ev); err != nil {
+		slog.Error("could not queue actions", "hook", hook, "transfer", r.t.Name, "key", ev.Key, "err", err)
+		metrics.Actions.WithLabelValues("queue", "failed").Inc()
+	}
 }
 
 // pushFile uploads one object under a temporary name and renames it when
@@ -175,13 +266,7 @@ func (r *run) push() error {
 // The temporary name is the real name with a dot in front. Most servers and
 // file watchers ignore dot files, and the name still ends the same way, so
 // filename rules on the remote (like "*.csv") accept it.
-func (r *run) pushFile(client *sftp.Client, bucket *blob.Bucket, key, remotePath string) error {
-	src, err := bucket.NewReader(r.ctx, key, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = src.Close() }()
-
+func (r *run) pushFile(client *sftp.Client, src io.Reader, remotePath string) error {
 	tmpPath := path.Join(path.Dir(remotePath), "."+path.Base(remotePath))
 	dst, err := client.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
@@ -210,20 +295,23 @@ func (r *run) pushFile(client *sftp.Client, bucket *blob.Bucket, key, remotePath
 	return nil
 }
 
-// afterPush deletes or moves the sent object, so the next run doesn't send it again.
-func (r *run) afterPush(bucket *blob.Bucket, key, name string) error {
+// afterPush deletes or moves the sent object, so the next run doesn't send
+// it again. It returns where the object is now.
+func (r *run) afterPush(bucket *blob.Bucket, key, name string) (string, error) {
 	ps := r.t.Push
+	moved := key
 	if prefix, ok := ps.MovePrefix(); ok {
-		if err := bucket.Copy(r.ctx, prefix+name, key, nil); err != nil {
-			return fmt.Errorf("sent, but could not move it to %s: %w", prefix, err)
+		moved = prefix + name
+		if err := bucket.Copy(r.ctx, moved, key, nil); err != nil {
+			return key, fmt.Errorf("sent, but could not move it to %s: %w", prefix, err)
 		}
 	} else if ps.After != "delete" {
-		return nil
+		return key, nil
 	}
 	if err := bucket.Delete(r.ctx, key); err != nil {
-		return fmt.Errorf("sent, but could not remove it from the bucket: %w", err)
+		return key, fmt.Errorf("sent, but could not remove it from the bucket: %w", err)
 	}
-	return nil
+	return moved, nil
 }
 
 // dial connects to a remote. Its host key must match the pinned one, and

@@ -43,9 +43,13 @@ type Server struct {
 	Buckets  *storage.Registry
 	Throttle *Throttle
 
-	// AfterUpload receives every file saved into a folder with on_upload
-	// steps. It may be nil.
-	AfterUpload func(vfs.Uploaded) error
+	// Enqueue receives every file whose folder has after_upload or
+	// after_download actions. It may be nil.
+	Enqueue func(vfs.FileEvent) error
+
+	// Before runs before_upload checks. Folders with checks refuse uploads
+	// while it is nil.
+	Before vfs.BeforeFunc
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -227,13 +231,14 @@ func (sess *session) handler(ctx context.Context, cfg *config.Config, s *Server)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess.files = &vfs.Handler{
-		Config:      cfg,
-		Account:     sess.account,
-		Buckets:     s.Buckets,
-		SessionID:   sess.id,
-		IP:          sess.ip,
-		AfterUpload: s.AfterUpload,
-		Ctx:         ctx,
+		Config:    cfg,
+		Account:   sess.account,
+		Buckets:   s.Buckets,
+		SessionID: sess.id,
+		IP:        sess.ip,
+		Enqueue:   s.Enqueue,
+		Before:    s.Before,
+		Ctx:       ctx,
 	}
 	return sess.files
 }

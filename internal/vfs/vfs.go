@@ -39,9 +39,13 @@ type Handler struct {
 	SessionID string
 	IP        string
 
-	// AfterUpload is called for every file saved into a folder that has
-	// on_upload actions. It may be nil.
-	AfterUpload func(Uploaded) error
+	// Enqueue queues the actions of an after_upload or after_download hook.
+	// It may be nil, and then those hooks don't run.
+	Enqueue func(FileEvent) error
+
+	// Before runs the actions of a before_upload hook on the spooled file.
+	// A folder with that hook refuses uploads while Before is nil.
+	Before BeforeFunc
 
 	// Ctx carries the session's trace span. File operations become child
 	// spans of it. It may be nil when tracing isn't used.
@@ -52,20 +56,40 @@ type Handler struct {
 	BytesOut atomic.Int64
 }
 
-// Uploaded describes a file that was just saved to a bucket.
-type Uploaded struct {
-	Account  string
-	Folder   string
+// BeforeFunc runs a "before" hook on a local file right away. It returns the
+// file to use from then on (a step like pgp_encrypt makes a new one), its
+// name, and a function that removes any temporary files.
+type BeforeFunc func(ctx context.Context, steps []*config.Step, path, filename string) (outPath, outName string, cleanup func(), err error)
+
+// FileEvent is a file whose after_* hook has actions to run: one uploaded or
+// downloaded by a partner, or one moved by a scheduled transfer.
+type FileEvent struct {
+	// Hook is the hook to run, like config.AfterUpload.
+	Hook string
+
+	// Account and Folder are set for uploads and downloads, Transfer, Remote
+	// and RemotePath for transfers.
+	Account    string
+	Folder     string
+	Transfer   string
+	Remote     string
+	RemotePath string
+
 	Storage  string
 	Key      string
 	Filename string
 	Size     int64
-	SHA256   string
-	Time     time.Time
+	// SHA256 may be empty when it isn't known; the actions work it out if
+	// they need the file.
+	SHA256 string
+	Time   time.Time
 
-	// TraceParent links the post-upload actions to the upload's trace.
+	// TraceParent links the actions to the trace that started them.
 	TraceParent string
 }
+
+// rejection is a failed check. Its message is meant for the partner.
+type rejection interface{ Rejected() bool }
 
 // Handlers returns the handler wired up the way pkg/sftp expects.
 func (h *Handler) Handlers() sftp.Handlers {
@@ -170,6 +194,32 @@ func (h *Handler) ctx() context.Context {
 	return h.Ctx
 }
 
+// enqueue hands a file to the actions of an after_* hook, if the folder has
+// any. The file is already safe in the bucket, so a failure here is logged
+// and counted, not reported to the client.
+func (h *Handler) enqueue(ctx context.Context, hook string, t *target, size int64, sha string) {
+	if len(t.folder.Hooks.Steps(hook)) == 0 || h.Enqueue == nil {
+		return
+	}
+	err := h.Enqueue(FileEvent{
+		Hook:     hook,
+		Account:  h.Account.Name,
+		Folder:   t.folder.Path,
+		Storage:  t.folder.Storage,
+		Key:      t.key,
+		Filename: path.Base(t.rel),
+		Size:     size,
+		SHA256:   sha,
+		Time:     time.Now(),
+
+		TraceParent: tracing.Inject(ctx),
+	})
+	if err != nil {
+		slog.Error("could not queue actions", "hook", hook, "key", t.key, "err", err)
+		metrics.Actions.WithLabelValues("queue", "failed").Inc()
+	}
+}
+
 // startSpan starts a span for one file operation, as a child of the session.
 func (h *Handler) startSpan(name string, t *target) (context.Context, trace.Span) {
 	ctx, span := tracing.Tracer.Start(h.ctx(), name)
@@ -190,9 +240,12 @@ func (h *Handler) finish(e audit.Event, t *target, err error) error {
 // Denied requests are audited too, because they can mean someone is probing.
 func (h *Handler) record(e audit.Event, t *target, err error) {
 	e.Result = audit.OK
+	var rej rejection
 	switch {
 	case errors.Is(err, sftp.ErrSSHFxPermissionDenied):
 		e.Result = audit.Denied
+	case errors.As(err, &rej):
+		e.Result, e.Error = audit.Denied, err.Error()
 	case err != nil:
 		e.Result = audit.Failed
 		e.Error = clientMessage(err)
@@ -219,9 +272,14 @@ var errNotEmpty = errors.New("directory not empty")
 // Storage details are logged but never sent to the client.
 func clientError(t *target, err error) error {
 	var status *sftp.StatusError
+	var rej rejection
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &rej):
+		// A check's message says what is wrong with the file, so the partner
+		// can fix it. It holds nothing about the storage.
+		return errors.New("upload rejected: " + err.Error())
 	case errors.Is(err, sftp.ErrSSHFxPermissionDenied),
 		errors.Is(err, sftp.ErrSSHFxNoSuchFile),
 		errors.Is(err, sftp.ErrSSHFxOpUnsupported),

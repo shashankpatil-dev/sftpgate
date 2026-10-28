@@ -17,7 +17,10 @@ type Config struct {
 	HTTP     HTTP              `yaml:"http"`
 	Storages map[string]string `yaml:"storages"`
 	Accounts []*Account        `yaml:"accounts"`
-	Actions  Actions           `yaml:"actions"`
+
+	// Actions are named steps (check, PGP, copy, webhook) that folders and
+	// transfers run from their hooks.
+	Actions map[string]*Step `yaml:"actions"`
 
 	Remotes   map[string]*Remote `yaml:"remotes"`
 	Transfers []*Transfer        `yaml:"transfers"`
@@ -53,6 +56,9 @@ type Server struct {
 	MinSpoolFree   Size          `yaml:"min_spool_free"`
 	ReloadInterval time.Duration `yaml:"reload_interval"`
 	Throttle       Throttle      `yaml:"throttle"`
+
+	// Queue says how the actions of after_* hooks run in the background.
+	Queue Queue `yaml:"queue"`
 
 	// Timezone is used for {date} and {time} in copy keys.
 	Timezone string         `yaml:"timezone"`
@@ -115,7 +121,10 @@ type Folder struct {
 	Patterns    []string `yaml:"patterns"`
 	MaxFileSize Size     `yaml:"max_file_size"`
 
-	// OnUpload runs, in order, after each file is saved to this folder.
+	Hooks Hooks `yaml:"hooks"`
+
+	// OnUpload is the older way to write hooks.after_upload, with the steps
+	// written in place. It still works; a folder can't use both.
 	OnUpload []*Step `yaml:"on_upload"`
 
 	Perm PermSet `yaml:"-"`
@@ -153,6 +162,16 @@ func (s PermSet) Has(p PermSet) bool {
 // Account finds an account by its SSH username. It returns nil if there is none.
 func (c *Config) Account(name string) *Account {
 	return c.byName[name]
+}
+
+// Transfer finds a transfer by name. It returns nil if there is none.
+func (c *Config) Transfer(name string) *Transfer {
+	for _, t := range c.Transfers {
+		if t.Name == name {
+			return t
+		}
+	}
+	return nil
 }
 
 // Folder finds the folder mounted at path, like "/inbound". It returns nil if there is none.
