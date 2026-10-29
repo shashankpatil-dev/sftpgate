@@ -5,10 +5,6 @@ Ideas and known gaps, not scheduled yet. Newest first.
 ## Features
 
 - **Scoped API tokens**, limited to some accounts or transfers.
-- **Webhooks for system events.** Actions and hooks (v0.4) made webhooks
-  work for uploads, downloads, pushes and pulls. Still missing: events that
-  aren't about one file, like `transfer_failed`, `action_gave_up` and
-  `auth_failed_spike`, so teams can notify Slack without Alertmanager.
 - **More checks.** Duplicate content (a SHA-256 already received under another
   name, which needs a store of seen hashes), Excel sheets, and JSON schema.
 - **`rejected/` for push transfers.** Today a file that fails `before_push`
@@ -35,3 +31,16 @@ Ideas and known gaps, not scheduled yet. Newest first.
 ## Project
 
 - CONTRIBUTING.md, CHANGELOG.md.
+
+## Not planned, and why
+
+- **Webhooks for system events** (`transfer_failed`, `action_gave_up`,
+  `auth_failed_spike`, `config_rejected`). Decided against on 2026-10-29.
+  Each one is already a Prometheus alert in `alerts.yml`
+  (`SftpgateTransferFailing`, `SftpgateActionsGaveUp`,
+  `SftpgateLoginFailureSpike`, `SftpgateConfigReloadFailed`), and
+  Alertmanager already sends alerts to Slack, email or PagerDuty, with
+  grouping, silencing and repeats. Rebuilding that inside SFTPgate would be a
+  weaker copy, and spike detection would count per pod. Webhooks stay for
+  file events (upload, download, push, pull), which only SFTPgate knows
+  about. See "Sending alerts to Slack" in the README.

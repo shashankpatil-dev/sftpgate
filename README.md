@@ -217,6 +217,29 @@ Ready-to-use files you can copy into your own setup:
   a dashboard with sessions, uploads, downloads, logins, traffic per account,
   transfer times, storage errors, denied requests and the running config version.
 
+### Sending alerts to Slack
+
+Alerts about the service itself (a failing transfer, actions that gave up, a
+spike of failed logins, a rejected config) come from these Prometheus rules,
+not from webhooks. Route them with Alertmanager:
+
+```yaml
+# alertmanager.yml
+route:
+  receiver: sftp-team
+  routes:
+    - matchers: [alertname=~"Sftpgate.*"]
+      receiver: sftp-team
+receivers:
+  - name: sftp-team
+    slack_configs:
+      - api_url_file: /etc/alertmanager/slack-webhook-url
+        channel: "#sftp-alerts"
+        send_resolved: true
+```
+
+SFTPgate's own webhooks are for file events (upload, download, push, pull).
+
 ### Tracing
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector:4318`)
