@@ -42,7 +42,7 @@ storage. Run `make down` to stop and delete everything.
 
 | What | Where |
 |---|---|
-| SFTPgate web UI | <http://localhost:8080/ui/> (any username, password `dev-only-ui-token`) |
+| SFTPgate API | `curl -H "Authorization: Bearer dev-only-api-token" localhost:8080/api/v1/status` |
 | Grafana dashboard | <http://localhost:3000> (opens without login; admin login is `admin` / `admin`) |
 | Prometheus and alerts | <http://localhost:9090/alerts> |
 | Traces (Jaeger) | <http://localhost:16686> |
@@ -152,23 +152,24 @@ GITOPS_REPO=https://github.com/acme/sftpgate-config.git GITOPS_PATH=prod/sftpgat
 ```
 
 A merged commit goes live within about 30 seconds. A commit with a broken
-config is rejected and the old config keeps running. The web UI, the API and
+config is rejected and the old config keeps running. The API and
 the `sftpgate_config_info` metric show the git commit that is live. See
 [`deploy/compose/gitops.yml`](deploy/compose/gitops.yml). On Kubernetes, run
 git-sync as a sidecar sharing an `emptyDir` with SFTPgate in the same way.
 
-## Web UI and API
+## API
 
-A read-only web page and JSON API show open sessions, recent events, the
-action queue and the running config. They are off until you set tokens:
+A read-only JSON API shows open sessions, recent events, the action queue
+and the running config. It is off until you set tokens. There is no web UI:
+use Grafana, your log system and traces for dashboards.
 
 ```yaml
 http:
-  tokens: ["${env:SFTPGATE_UI_TOKEN}"]   # at least 16 characters
+  tokens: ["${env:SFTPGATE_API_TOKEN}"]   # at least 16 characters
 ```
 
-In a browser, log in with any username and a token as the password. Scripts
-send `Authorization: Bearer <token>`.
+Send `Authorization: Bearer <token>` (a Basic login with the token as the
+password works too).
 
 | Endpoint | Returns |
 |---|---|
@@ -178,9 +179,32 @@ send `Authorization: Bearer <token>`.
 | `GET /api/v1/actions` | action jobs waiting and failed |
 | `GET /api/v1/config` | the config file as written (secrets only as references) |
 
-Nothing can be changed here. There are only GET routes; changes go through git.
 The events list is in memory and starts empty after a restart. Full history
 is in your log system.
+
+### Admin calls
+
+Two calls change something. Each is **off** until you list it, and they take
+only their own admin tokens, never the read-only ones:
+
+```yaml
+http:
+  admin:
+    tokens: ["${env:SFTPGATE_ADMIN_TOKEN}"]   # must differ from http.tokens
+    allow: [run_transfer, retry_actions]      # list only what you need
+```
+
+| Endpoint | Does | Answers |
+|---|---|---|
+| `POST /api/v1/transfers/{name}/run` | runs a transfer now, in the background | `202` started, `404` unknown, `409` already running or transfers run on another replica |
+| `POST /api/v1/actions/retry[?job=<id>]` | moves failed action jobs (one, or all) back into the queue, attempts reset | `200 {"retried": n}`, `404` unknown job |
+
+Admin tokens work only as `Authorization: Bearer <token>`, so a browser can't
+be tricked into sending one. A call that isn't allowed answers `404`, as if
+it didn't exist. Every call, allowed or refused, is an `admin` audit event.
+Failed jobs live on each pod's own disk, so retry calls the pod that has
+them; run-transfer must reach the pod named in `SFTPGATE_TRANSFERS_ONLY_ON`.
+The config still changes only through git.
 
 ## Monitoring
 
@@ -252,7 +276,7 @@ helm install sftpgate deploy/helm/sftpgate -n sftpgate -f my-values.yaml
 The chart runs a StatefulSet, so each pod gets its own disk for the spool and
 the action queue, behind a LoadBalancer that keeps partners' real IPs. It
 supports secrets as env vars or files, git-sync, ServiceMonitor and
-PrometheusRule, a Grafana dashboard ConfigMap, an Ingress for the UI, and
+PrometheusRule, a Grafana dashboard ConfigMap, an Ingress for the API, and
 several replicas (scheduled transfers then run on the first pod only). See
 [`values.yaml`](deploy/helm/sftpgate/values.yaml) for every setting.
 
@@ -352,7 +376,7 @@ disconnected. An invalid file is rejected, and the old config keeps running.
 | 8080 | `/metrics` | Prometheus metrics |
 | 8080 | `/healthz` | process is up |
 | 8080 | `/readyz` | config loaded and every storage reachable |
-| 8080 | `/ui/`, `/api/v1/` | read-only web UI and API (when `http.tokens` is set) |
+| 8080 | `/api/v1/` | read-only API (when `http.tokens` is set) and admin calls (when `http.admin` allows them) |
 
 ## Development
 

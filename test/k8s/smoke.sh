@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the Helm chart on a local kind cluster and checks it really works:
-# SFTP upload and download, health, the UI, transfers on one pod only,
+# SFTP upload and download, health, the API, transfers on one pod only,
 # hot reload of a config change, the security settings, and git-sync.
 #
 #   test/k8s/smoke.sh            # needs docker, kind, kubectl, helm
@@ -78,7 +78,7 @@ kubectl -n "$NS" create secret generic sftpgate-host-keys --from-file="$work/ssh
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$NS" create secret generic sftpgate-test-demo-key --from-file="$work/demo_user.pub" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "$NS" create secret generic sftpgate-test-env --from-literal=UI_TOKEN=kind-smoke-test-token \
+kubectl -n "$NS" create secret generic sftpgate-test-env --from-literal=API_TOKEN=kind-smoke-test-token \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 echo "installing the chart..."
@@ -92,12 +92,12 @@ printf 'put %s /files/upload.bin\nget /files/upload.bin %s\n' "$work/upload.bin"
   || fail "sftp upload/download failed"
 cmp -s "$work/upload.bin" "$work/download.bin" || fail "downloaded file differs"
 
-echo "checking health, readiness and the UI..."
+echo "checking health, readiness and the API..."
 forward service/sftpgate-http "$HTTP_PORT:8080"
 curl -fs localhost:$HTTP_PORT/healthz >/dev/null || fail "/healthz"
 curl -fs localhost:$HTTP_PORT/readyz >/dev/null || fail "/readyz"
 grep -q '"ready": true' <<<"$(curl -fs -u x:kind-smoke-test-token localhost:$HTTP_PORT/api/v1/status)" || fail "API status"
-[ "$(curl -s -o /dev/null -w '%{http_code}' localhost:$HTTP_PORT/ui/)" = 401 ] || fail "UI must ask for a token"
+[ "$(curl -s -o /dev/null -w '%{http_code}' localhost:$HTTP_PORT/api/v1/status)" = 401 ] || fail "API must ask for a token"
 
 echo "checking that transfers run on the first pod only..."
 grep -q "scheduled transfers run on another replica" <<<"$(kubectl -n "$NS" logs sftpgate-1 -c sftpgate)" \

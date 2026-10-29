@@ -21,14 +21,20 @@ import (
 const token = "a-long-enough-test-token"
 
 func newSite(t *testing.T, tokens []string) *httptest.Server {
+	return newSiteWith(t, config.HTTP{Tokens: tokens}, nil)
+}
+
+// newSiteWith builds a site with these HTTP settings; change, if set, can
+// replace parts of the source.
+func newSiteWith(t *testing.T, h config.HTTP, change func(*web.Source)) *httptest.Server {
 	t.Helper()
 	audit.SetOutput(io.Discard)
 	cfg := &config.Config{
-		HTTP: config.HTTP{Tokens: tokens},
+		HTTP: h,
 		Raw:  []byte("auth:\n  password_hash: ${env:PW_HASH}\n"),
 		Hash: "0123456789abcdef0123",
 	}
-	srv := httptest.NewServer(web.Handler(web.Source{
+	src := web.Source{
 		Version: "test",
 		Started: time.Now().Add(-time.Hour),
 		Config:  func() *config.Config { return cfg },
@@ -39,7 +45,11 @@ func newSite(t *testing.T, tokens []string) *httptest.Server {
 		Actions: func() ([]actions.Job, []actions.Job, error) {
 			return []actions.Job{{ID: "j1", Account: "web-vendor", Filename: "a.csv", Attempt: 1}}, nil, nil
 		},
-	}))
+	}
+	if change != nil {
+		change(&src)
+	}
+	srv := httptest.NewServer(web.Handler(src))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -67,9 +77,9 @@ func bearer(tok string) func(*http.Request) {
 	return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+tok) }
 }
 
-func TestAPIAndUIAreOffWithoutTokens(t *testing.T) {
+func TestAPIIsOffWithoutTokens(t *testing.T) {
 	site := newSite(t, nil)
-	for _, path := range []string{"/api/v1/status", "/ui/"} {
+	for _, path := range []string{"/api/v1/status", "/api/v1/events"} {
 		if resp, _ := get(t, site.URL+path, basic(token)); resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s: status %d, want 404 when no tokens are set", path, resp.StatusCode)
 		}
@@ -100,8 +110,8 @@ func TestTokens(t *testing.T) {
 			if resp.StatusCode != tc.want {
 				t.Fatalf("status %d, want %d", resp.StatusCode, tc.want)
 			}
-			if tc.want == http.StatusUnauthorized && !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), "Basic") {
-				t.Fatal("a 401 must ask the browser for a login")
+			if tc.want == http.StatusUnauthorized && !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), "Bearer") {
+				t.Fatal("a 401 must say a Bearer token is needed")
 			}
 			if resp.Header.Get("Cache-Control") != "no-store" {
 				t.Fatal("API answers must not be cached")
@@ -176,36 +186,6 @@ func TestEventFilters(t *testing.T) {
 	}
 }
 
-func TestPages(t *testing.T) {
-	site := newSite(t, []string{token})
-	// A username typed by an attacker must show up as text, not as HTML.
-	audit.Emit(audit.Event{Event: "auth_failed", Result: audit.Failed, User: "<script>alert(1)</script>", IP: "198.51.100.9"})
-
-	pages := map[string]string{
-		"/ui/":           "web-vendor",
-		"/ui/events":     "198.51.100.9",
-		"/ui/actions":    "j1",
-		"/ui/config":     "${env:PW_HASH}",
-		"/ui/style.css":  "--accent",
-		"/":              "Overview",
-		"/ui/events?x=1": "Show",
-	}
-	for path, want := range pages {
-		resp, body := get(t, site.URL+path, basic(token))
-		if resp.StatusCode != http.StatusOK || !strings.Contains(body, want) {
-			t.Errorf("%s: status %d, %q missing", path, resp.StatusCode, want)
-		}
-		if strings.Contains(body, "<script>") {
-			t.Errorf("%s: user input was not escaped", path)
-		}
-	}
-
-	resp, _ := get(t, site.URL+"/ui/", basic(token))
-	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") {
-		t.Fatalf("missing strict CSP, got %q", csp)
-	}
-}
-
 func TestNotReadyIsShown(t *testing.T) {
 	audit.SetOutput(io.Discard)
 	cfg := &config.Config{HTTP: config.HTTP{Tokens: []string{token}}}
@@ -221,8 +201,14 @@ func TestNotReadyIsShown(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz status %d, want 503", resp.StatusCode)
 	}
-	_, body := get(t, site.URL+"/ui/actions", basic(token))
-	if !strings.Contains(body, "storage raw: unreachable") || !strings.Contains(body, "queue unreadable") {
-		t.Fatal("the UI must show why it is not ready and why the queue can't be read")
+	_, body := get(t, site.URL+"/api/v1/status", bearer(token))
+	if !strings.Contains(body, "storage raw: unreachable") {
+		t.Fatalf("the status must say why it is not ready: %s", body)
+	}
+	if resp, _ := get(t, site.URL+"/api/v1/actions", bearer(token)); resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("an unreadable queue must be a 500, got %d", resp.StatusCode)
+	}
+	if resp, _ := get(t, site.URL+"/ui/", basic(token)); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("the HTML UI is gone, /ui/ must be a 404, got %d", resp.StatusCode)
 	}
 }

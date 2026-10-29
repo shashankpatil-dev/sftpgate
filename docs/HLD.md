@@ -56,7 +56,7 @@ flowchart LR
     AUD["Audit - JSON stdout"]
     MET["Metrics"]
     TR["Traces - v0.2"]
-    WEB["HTTP :8080<br/>metrics, health, API/UI v0.3"]
+    WEB["HTTP :8080<br/>metrics, health, API, admin calls"]
   end
 
   CFG[("sftpgate.yaml")] --> CM
@@ -83,7 +83,7 @@ flowchart LR
 | D7 | **Config is an immutable snapshot swapped atomically** | Lock-free reads, simple reasoning, safe reload. | Mutable config with locks. |
 | D8 | **Reload by polling the file hash + SIGHUP** | Works with k8s ConfigMap symlink swaps and Docker bind mounts. No fsnotify edge cases. | fsnotify (unreliable with atomic symlink swaps). |
 | D9 | **GitOps via `git-sync` sidecar, not a built-in git client** | Zero code. Standard and well-maintained tool. Handles auth, SSH keys and branches. | Embedding go-git (large dependency, auth and credential handling becomes our problem). |
-| D10 | **Read-only UI served by the same binary from embedded HTML templates** | No JS build chain and no second service. Read-only by construction (GET handlers only). | React SPA (build tooling and attack surface for a status page). |
+| D10 | **JSON API only, no web UI (v0.4).** Two admin calls (run a transfer now, retry failed actions), each off until listed in `http.admin.allow`, with separate Bearer-only tokens. | Grafana, logs and traces already show sessions and events better; the HTML UI was extra code and a login surface. Bearer-only admin tokens can't be replayed by a browser (no CSRF). | Keeping the embedded HTML UI (v0.3); a React SPA. |
 | D11 | **Durable action queue = JSON files in a spool directory** | Survives restarts with ~50 lines of code. Visible and debuggable. | Redis/NATS/DB (new infrastructure). |
 | D12 | **Traces via standard OTel env vars only** | Zero config surface. Off by default, at zero cost. | Tracing settings in YAML. |
 
@@ -111,7 +111,7 @@ flowchart LR
 ### 3.4 Session handler
 - Accepts only `session` channels and only the `sftp` subsystem request. Rejects `exec`, `shell`, `pty-req`, and all forwarding and global requests.
 - Starts a `pkg/sftp` RequestServer with handlers bound to (account, folders, session ID, remote IP).
-- Tracks active sessions in a registry used by limits, reload, metrics and the UI.
+- Tracks active sessions in a registry used by limits, reload, metrics and the API.
 
 ### 3.5 VFS (virtual filesystem)
 - Maps SFTP paths to `(folder, storage, object key)`. The root `/` lists the account's folders and is read-only.
@@ -140,7 +140,7 @@ flowchart LR
 
 ### 3.10 Web (HTTP :8080)
 - `/metrics`, `/healthz`, `/readyz`: unauthenticated (meant for internal networks only).
-- `/api/v1/*`, `/ui/*` (v0.3): bearer token (`http.tokens` from env/file), GET only. Data comes from the session registry and an in-memory ring buffer of recent events. Long-term history is in the audit log, by design.
+- `GET /api/v1/*`: bearer token (`http.tokens` from env/file). `POST /api/v1/transfers/{name}/run` and `POST /api/v1/actions/retry`: only when `http.admin.allow` lists them (404 otherwise), only with an `http.admin.tokens` Bearer token, each call audited as `admin`. Data comes from the session registry and an in-memory ring buffer of recent events. Long-term history is in the audit log, by design.
 
 ## 4. Key flows
 
@@ -341,7 +341,7 @@ flowchart LR
 | Brute force / credential stuffing | Global and per-account IP allowlists, per-IP throttle, `MaxAuthTries`, constant-time checks, dummy bcrypt for unknown users. |
 | Escaping the folder jail | No OS filesystem access. Paths are cleaned and resolved only against declared folders. `..` cannot leave a folder. Object keys are built only from the folder prefix + relative path. |
 | Lateral movement through SSH features | Only the `sftp` subsystem. No shell, exec, SCP, forwarding or agent. |
-| Secrets leaking via git | Secret fields **must** be `${env:}`/`${file:}`/`${secret:}` references, and `validate` (run in CI on every PR) rejects inline values. Passwords are bcrypt hashes even inside the secret store. The UI shows only the raw YAML, so secrets appear as references, never as values. See 6.1. |
+| Secrets leaking via git | Secret fields **must** be `${env:}`/`${file:}`/`${secret:}` references, and `validate` (run in CI on every PR) rejects inline values. Passwords are bcrypt hashes even inside the secret store. The API shows only the raw YAML, so secrets appear as references, never as values. See 6.1. |
 | Cloud credential exposure | Credentials come only from the runtime environment (workload identity / IAM). Nothing in YAML. |
 | Partial or corrupt files downstream | Commit on close. SHA-256 is stored in object metadata and read back after every save (size + checksum) before success is reported. GCS/Azure also verify an MD5; S3 uses SDK request checksums. |
 | Host impersonation | Persistent host keys from a secret. Fingerprint is documented for vendors. |
@@ -390,7 +390,7 @@ flowchart LR
 - run: |
     kubectl create secret generic sftpgate-secrets \
       --from-literal=RAZORPAY_PW_HASH='${{ secrets.RAZORPAY_PW_HASH }}' \
-      --from-literal=SFTPGATE_UI_TOKEN='${{ secrets.SFTPGATE_UI_TOKEN }}' \
+      --from-literal=SFTPGATE_API_TOKEN='${{ secrets.SFTPGATE_API_TOKEN }}' \
       --dry-run=client -o yaml | kubectl apply -f -
 # the sftpgate Deployment loads it with envFrom: secretRef: sftpgate-secrets
 ```

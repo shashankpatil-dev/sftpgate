@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -52,7 +53,8 @@ func validate(cfg *Config, refs map[string]bool, opt Options) error {
 		c.fail("version", "must be 1")
 	}
 	c.server(cfg)
-	c.httpTokens(cfg.HTTP.Tokens)
+	c.httpTokens("http.tokens", cfg.HTTP.Tokens)
+	c.admin(cfg.HTTP)
 	c.storages(cfg.Storages)
 	c.actions(cfg)
 
@@ -101,14 +103,44 @@ func (c *checker) server(cfg *Config) {
 	}
 }
 
-// httpTokens checks the API and UI tokens. They are secrets, and they must
-// be long enough that guessing them is hopeless.
-func (c *checker) httpTokens(tokens []string) {
+// httpTokens checks API tokens. They are secrets, and they must be long
+// enough that guessing them is hopeless.
+func (c *checker) httpTokens(path string, tokens []string) {
 	for i, tok := range tokens {
-		p := fmt.Sprintf("http.tokens[%d]", i)
+		p := fmt.Sprintf("%s[%d]", path, i)
 		c.secret(p, tok, true)
 		if c.refs[p] && !c.unresolved(p) && len(tok) < 16 {
 			c.fail(p, "must be at least 16 characters")
+		}
+	}
+}
+
+// admin checks http.admin: tokens and allow go together, only known
+// operations, and no admin token may also be a read-only token.
+func (c *checker) admin(h HTTP) {
+	a := h.Admin
+	c.httpTokens("http.admin.tokens", a.Tokens)
+	switch {
+	case len(a.Tokens) > 0 && len(a.Allow) == 0:
+		c.fail("http.admin.allow", "list the operations to allow (%s, %s), or remove http.admin.tokens", RunTransfer, RetryActions)
+	case len(a.Tokens) == 0 && len(a.Allow) > 0:
+		c.fail("http.admin.tokens", "needed when http.admin.allow is set")
+	}
+	seen := map[string]bool{}
+	for i, op := range a.Allow {
+		p := fmt.Sprintf("http.admin.allow[%d]", i)
+		if op != RunTransfer && op != RetryActions {
+			c.fail(p, "unknown operation %q (use %s or %s)", op, RunTransfer, RetryActions)
+		}
+		if seen[op] {
+			c.fail(p, "%q is listed twice", op)
+		}
+		seen[op] = true
+	}
+	for i, tok := range a.Tokens {
+		// Offline the values are still the references, which works too.
+		if tok != "" && slices.Contains(h.Tokens, tok) {
+			c.fail(fmt.Sprintf("http.admin.tokens[%d]", i), "must differ from every read-only token in http.tokens")
 		}
 	}
 }

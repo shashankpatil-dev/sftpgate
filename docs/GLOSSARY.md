@@ -77,7 +77,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Source of truth**
 : The one place that decides how things should be. For SFTPgate that's the
-  config in git, never the UI.
+  config in git, never the API.
 
 **Reload / hot reload**
 : Picking up a changed config **without restarting**. SFTPgate checks the file
@@ -102,12 +102,12 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Config hash**
 : A short fingerprint of the config file's exact contents. It changes when any
-  character changes, so you can tell which version is running. Shown in the UI
+  character changes, so you can tell which version is running. Shown by the API
   and metrics.
 
 **Revision**
 : The git commit (a 40-character id) the running config came from. Shown in the
-  UI and metrics when known.
+  API and metrics when known.
 
 **git-sync**
 : A small standard helper program that copies a git repository onto disk and
@@ -124,7 +124,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
   `idle_timeout` defaults to 15 minutes.
 
 **Off by default / opt-in**
-: Extra features (PGP, copies, webhooks, transfers, UI, tracing) do nothing
+: Extra features (PGP, copies, webhooks, transfers, API, admin calls, tracing) do nothing
   until you add their settings. A minimal config gives a plain, locked-down
   SFTP gateway.
 
@@ -666,7 +666,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Secret**
 : Anything that must stay private: passwords, private keys, PGP keys,
-  webhook secrets, UI tokens.
+  webhook secrets, API and admin tokens.
 
 **Inline secret**
 : A secret written directly into the config file. **SFTPgate refuses this**,
@@ -684,7 +684,7 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
   | `${secret:awsparamstore://NAME?region=R}` | AWS Parameter Store |
 
 **Environment variable / env var**
-: A named value given to a program when it starts, like `UI_TOKEN=...`.
+: A named value given to a program when it starts, like `API_TOKEN=...`.
 
 **Kubernetes Secret / Docker secret**
 : The platform's safe place for secrets. Its values reach SFTPgate as env vars
@@ -701,31 +701,39 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 ---
 
-## 11. Web UI, API and tokens
-
-**Web UI**
-: Read-only web pages at `/ui/`. They show open sessions, recent events,
-  action jobs and the running config. It's for the operations and
-  security team, not for partners.
+## 11. API, admin calls and tokens
 
 **API**
-: The same information as JSON at `/api/v1/...`, for scripts and tools.
+: JSON at `/api/v1/...` for scripts and tools: open sessions, recent events,
+  action jobs and the running config. It's for the operations and security
+  team, not for partners. There is no web UI; dashboards are in Grafana.
 
 **Read-only**
-: Can look, can't change. There are no buttons to change anything: changes go
+: Can look, can't change. All read-only calls are `GET`; config changes go
   through git.
 
 **Token / `http.tokens`**
-: The password for the UI and API. At least 16 characters, given as a
-  reference. With no tokens, the UI and API are switched off.
+: The password for the read-only API. At least 16 characters, given as a
+  reference. With no tokens, the API is switched off.
 
-**Basic auth / Bearer token**
-: Two ways to send the token. Browsers show a login box (any username, token
-  as password). Scripts send the header `Authorization: Bearer <token>`.
+**Admin call**
+: One of the two API calls that change something: run a transfer now
+  (`run_transfer`) or put failed action jobs back in the queue
+  (`retry_actions`). Each is off until listed in `http.admin.allow`; an
+  unlisted one answers 404, as if it didn't exist.
+
+**Admin token / `http.admin.tokens`**
+: The password for the admin calls. Separate from the read-only tokens (the
+  same value is refused), and accepted only as a Bearer header.
+
+**Bearer token**
+: The header `Authorization: Bearer <token>`. The read-only API also takes
+  the token as the password of a Basic login; admin calls don't, because a
+  browser can resend a Basic login on its own.
 
 **Recent events**
-: The last 2000 audit events, kept in memory for the UI. They start empty after
-  a restart; full history is in your log system.
+: The last 2000 audit events, kept in memory for the API. They start empty
+  after a restart; full history is in your log system.
 
 ---
 
@@ -859,10 +867,10 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 
 **Service / LoadBalancer / ClusterIP**
 : How pods are reached. A **LoadBalancer** gets a public address (for partners);
-  **ClusterIP** is reachable only inside the cluster (for metrics and the UI).
+  **ClusterIP** is reachable only inside the cluster (for metrics and the API).
 
 **Ingress**
-: A web entry point into the cluster. Optional, for the UI.
+: A web entry point into the cluster. Optional, for the API.
 
 **ServiceAccount**
 : The identity a pod runs as in Kubernetes. Cloud workload identity is attached

@@ -26,7 +26,7 @@ config: |
     host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
     reload_interval: 2s
   http:
-    tokens: ["${env:UI_TOKEN}"]
+    tokens: ["${env:API_TOKEN}"]
   storages:
     # Test only: each pod's own disk. Real installs use a bucket.
     local: "file:///var/lib/sftpgate/data"
@@ -44,7 +44,7 @@ config: |
       addr: "127.0.0.1:1"
       user: x
       host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-      password: "${env:UI_TOKEN}"
+      password: "${env:API_TOKEN}"
   transfers:
     - name: yearly
       schedule: "0 0 1 1 *"

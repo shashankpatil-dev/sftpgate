@@ -278,9 +278,11 @@ fun Route.sftpWebhook(secret: String, recon: ReconService, seen: ProcessedJobs) 
   end-to-end proof that it wasn't changed.
 
 **Missed webhooks:** if revenue-assurance was down through every retry, the job
-shows as **failed** in SFTPgate's UI and `SftpgateActionsGaveUp` fires, but
-**the file is safe in the bucket**. A nightly job that lists
-`<gateway>/incoming/` and processes anything not yet handled covers every case.
+shows as **failed** in `GET /api/v1/actions` and `SftpgateActionsGaveUp` fires, but
+**the file is safe in the bucket**. Once it is back, `POST /api/v1/actions/retry`
+(with `retry_actions` allowed in `http.admin`) sends them again. A nightly
+job that lists `<gateway>/incoming/` and processes anything not yet handled
+covers every case.
 
 ## 5. What changes in `sftp/values.yaml`
 
@@ -345,8 +347,8 @@ downtime.
 | Question | Where |
 |---|---|
 | Did Razorpay upload today? | Audit log: `event=upload account=razorpay`; or list `razorpay/incoming/` |
-| Who is connected right now? | The web UI `/ui` (with `http.tokens`), or `sftpgate_sessions_active` |
-| Did revenue-assurance get told? | Audit `action` events; UI "actions" page; alerts `SftpgateActionsRetrying` and `SftpgateActionsGaveUp` |
+| Who is connected right now? | `GET /api/v1/sessions` (with `http.tokens`), or `sftpgate_sessions_active` |
+| Did revenue-assurance get told? | Audit `action` events; `GET /api/v1/actions`; alerts `SftpgateActionsRetrying` and `SftpgateActionsGaveUp` |
 | Is someone guessing passwords? | `SftpgateLoginFailureSpike`, `SftpgateIPsBlocked` |
 | Can SFTPgate reach the bucket? | `SftpgateStorageErrors`, `/readyz` |
 

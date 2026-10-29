@@ -80,7 +80,7 @@ service:
     loadBalancerSourceRanges: []
     annotations: {}
   http:
-    # Metrics, health checks and (with http.tokens) the read-only UI and API.
+    # Metrics, health checks and (with http.tokens) the read-only API.
     port: 8080
     annotations: {}
 
@@ -138,7 +138,8 @@ metrics:
     labels:
       grafana_dashboard: "1"
 
-# Ingress for the read-only web UI and API (needs http.tokens in the config).
+# Ingress for the API (needs http.tokens in the config). It also carries the
+# admin calls when http.admin allows them; keep it on an internal network.
 ingress:
   enabled: false
   className: ""

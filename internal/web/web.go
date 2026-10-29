@@ -1,12 +1,11 @@
 // Package web serves the HTTP endpoints:
 //
 //   - /metrics for Prometheus, and /healthz and /readyz for health checks
-//   - /api/v1/... a read-only JSON API
-//   - /ui/... a read-only web page that shows the same data
+//   - /api/v1/... a read-only JSON API, off until http.tokens is set
+//   - two admin calls that change something (run a transfer now, retry
+//     failed actions), each off until http.admin allows it
 //
-// The API and UI are off until http.tokens is set in the config. Only GET
-// routes exist, so nothing here can change the server: every change goes
-// through git.
+// Config changes still only go through git: nothing here edits the config.
 package web
 
 import (
@@ -24,7 +23,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/server"
 )
 
-// Source is where the API and UI get their data.
+// Source is where the API gets its data.
 type Source struct {
 	Version string
 	Started time.Time
@@ -36,6 +35,14 @@ type Source struct {
 	Ready    func(context.Context) error
 	Sessions func() []server.SessionInfo
 	Actions  func() (pending, failed []actions.Job, err error)
+
+	// RunTransfer starts a transfer in the background. It is nil when
+	// scheduled transfers run on another replica.
+	RunTransfer func(name string) error
+
+	// RetryActions moves failed jobs back into the queue: the one with
+	// this id, or all when id is "". It returns how many.
+	RetryActions func(id string) (int, error)
 }
 
 type site struct {
@@ -59,12 +66,8 @@ func Handler(src Source) http.Handler {
 	mux.HandleFunc("GET /api/v1/actions", s.protect(s.apiActions))
 	mux.HandleFunc("GET /api/v1/config", s.protect(s.apiConfig))
 
-	mux.HandleFunc("GET /ui/{$}", s.protect(s.uiOverview))
-	mux.HandleFunc("GET /ui/events", s.protect(s.uiEvents))
-	mux.HandleFunc("GET /ui/actions", s.protect(s.uiActions))
-	mux.HandleFunc("GET /ui/config", s.protect(s.uiConfig))
-	mux.HandleFunc("GET /ui/style.css", s.protect(serveCSS))
-	mux.Handle("GET /{$}", http.RedirectHandler("/ui/", http.StatusFound))
+	mux.HandleFunc("POST /api/v1/transfers/{name}/run", s.admin(config.RunTransfer, s.apiRunTransfer))
+	mux.HandleFunc("POST /api/v1/actions/retry", s.admin(config.RetryActions, s.apiRetryActions))
 
 	return mux
 }
@@ -79,9 +82,9 @@ func (s *site) readyz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-// protect lets a request through only with a valid token. Browsers send it
-// as the password of the login prompt; scripts can send "Bearer <token>".
-// With no tokens configured, the API and UI don't exist.
+// protect lets a request through only with a valid read-only token, sent
+// as "Bearer <token>" or as the password of a Basic login. With no tokens
+// configured, the API doesn't exist.
 func (s *site) protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokens := s.src.Config().HTTP.Tokens
@@ -89,13 +92,9 @@ func (s *site) protect(next http.HandlerFunc) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-
+		safeHeaders(w)
 		if !validToken(requestToken(r), tokens) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="SFTPgate", charset="UTF-8"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="SFTPgate"`)
 			http.Error(w, "a valid token is required", http.StatusUnauthorized)
 			return
 		}
@@ -103,13 +102,23 @@ func (s *site) protect(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func safeHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
 // requestToken reads the token from a Bearer header or a Basic login.
 func requestToken(r *http.Request) string {
-	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+	if bearer, ok := bearerToken(r); ok {
 		return bearer
 	}
 	_, password, _ := r.BasicAuth()
 	return password
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	return strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 }
 
 // validToken compares in constant time. Hashing first makes both sides the

@@ -11,7 +11,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 )
 
-// Status is the summary shown at the top of the UI and by /api/v1/status.
+// Status is the summary returned by /api/v1/status.
 type Status struct {
 	Version        string    `json:"version"`
 	Started        time.Time `json:"started"`

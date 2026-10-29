@@ -157,7 +157,7 @@ What each part does:
 | Part | Why |
 |---|---|
 | `-p 22:2222` | Partners connect on the normal SFTP port 22. If the host's own SSH already uses 22, use another port, like `-p 2222:2222`. |
-| `-p 127.0.0.1:8080:8080` | Metrics, health checks and the UI, on the server itself only. Put a firewall or VPN in front before opening it further. |
+| `-p 127.0.0.1:8080:8080` | Metrics, health checks and the API, on the server itself only. Put a firewall or VPN in front before opening it further. |
 | `-v .../config:...:ro` | The config **folder**, read-only. A folder, not the file, so edits are seen (hot reload). |
 | `-v .../keys:...:ro` | The host key. |
 | `-v sftpgate-data:/var/lib/sftpgate` | The spool and the action queue. Keep it, or queued work is lost. |
@@ -228,7 +228,7 @@ Make one Secret for values used as `${env:NAME}`:
 ```sh
 kubectl -n sftpgate create secret generic sftpgate-secrets \
   --from-literal=RAZORPAY_PW_HASH='$2a$12$...' \
-  --from-literal=SFTPGATE_UI_TOKEN="$(openssl rand -hex 24)"
+  --from-literal=SFTPGATE_API_TOKEN="$(openssl rand -hex 24)"
 ```
 
 And Secrets for files used as `${file:...}`, like PGP keys:
@@ -257,7 +257,7 @@ config: |
     host_keys: [/etc/sftpgate/keys/ssh_host_ed25519_key]
     timezone: Asia/Kolkata
   http:
-    tokens: ["${env:SFTPGATE_UI_TOKEN}"]
+    tokens: ["${env:SFTPGATE_API_TOKEN}"]
   storages:
     main: "gs://acme-sftp-exchange"
   actions:
@@ -387,7 +387,7 @@ with instructions.
 5. **Send the partner:** the address, the port, their username (`newvendor`), and
    the host key fingerprint.
 
-6. **Check** the UI Events page or the audit log for their first `session_start`
+6. **Check** `GET /api/v1/events?account=<name>` or the audit log for their first `session_start`
    and `upload`.
 
 **Removing a partner:** delete their account block and merge. Open sessions are
@@ -441,16 +441,20 @@ echo 'pw' | sftpgate hash-password -cost 12
 Store the **hash** in your secret store and reference it. The partner keeps the
 password.
 
-### UI and API tokens
+### API and admin tokens
 
 ```sh
 openssl rand -hex 24              # a strong token
 ```
 
-Store it as a secret and list it under `http.tokens`. In a browser, log in with
-any username and the token as the password. In scripts, send
+Store it as a secret and list it under `http.tokens`, then send
 `Authorization: Bearer <token>`. Several tokens are allowed (for example one per
-team), so you can change one without logging everyone out.
+team), so you can change one without cutting everyone off.
+
+Admin tokens (`http.admin.tokens`) are made the same way but kept separate:
+they must differ from every read-only token, and only work as a Bearer header.
+Give them only to the people or jobs that must run a transfer now or retry
+failed actions, and list only those operations in `http.admin.allow`.
 
 ---
 
@@ -494,7 +498,7 @@ leave out take their default.
 ```yaml
 version: 1              # required, always 1
 server: {...}           # how the SFTP server behaves
-http: {...}             # metrics, health, UI and API
+http: {...}             # metrics, health, API and admin calls
 storages: {...}         # your buckets
 actions: {...}          # named actions (check, PGP, copy, webhook)
 accounts: [...]         # partner and service logins
@@ -528,8 +532,17 @@ Durations are written like `30s`, `15m`, `2h`. Sizes are written like `512KiB`,
 
 | Setting | Default | What it does |
 |---|---|---|
-| `listen` | `":8080"` | Address for `/metrics`, `/healthz`, `/readyz`, `/ui/`, `/api/v1/` |
-| `tokens` | empty (UI and API off) | Tokens that open the read-only UI and API. References only, 16+ characters. |
+| `listen` | `":8080"` | Address for `/metrics`, `/healthz`, `/readyz` and `/api/v1/` |
+| `tokens` | empty (API off) | Tokens that open the read-only API. References only, 16+ characters. |
+| `admin.tokens` | empty (admin off) | Tokens for the admin calls. References only, 16+ characters, different from `tokens`. |
+| `admin.allow` | empty (admin off) | The admin calls that exist: `run_transfer` (`POST /api/v1/transfers/<name>/run`) and `retry_actions` (`POST /api/v1/actions/retry[?job=<id>]`). Anything not listed answers 404. Needs `admin.tokens`, and tokens need at least one entry here. |
+
+Run-transfer answers `202` and runs in the background; the result is the
+`transfer` audit event and metrics. It answers `409` while that transfer is
+running or on a replica that doesn't run transfers (see
+`SFTPGATE_TRANSFERS_ONLY_ON`). Retry works on the failed jobs of the pod you
+reach, since each pod keeps its own queue. Every admin call is an `admin`
+audit event.
 
 ### 8.4 `storages`
 
@@ -789,7 +802,7 @@ At least one of `private_key` or `password` is needed. Give the partner your
 | Variable | What it does |
 |---|---|
 | `SFTPGATE_CONFIG` | Path of the config file. Default `/etc/sftpgate/sftpgate.yaml`. |
-| `SFTPGATE_REVISION` | The git commit to show in the UI and metrics. Found automatically with git-sync. |
+| `SFTPGATE_REVISION` | The git commit to show in the API and metrics. Found automatically with git-sync. |
 | `SFTPGATE_TRANSFERS` | `off` disables scheduled transfers on this copy |
 | `SFTPGATE_TRANSFERS_ONLY_ON` | Run transfers only on the copy with this host name (Helm sets it) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Turns tracing on, like `http://otel-collector:4318` |
@@ -818,7 +831,7 @@ At least one of `private_key` or `password` is needed. Give the partner your
 | `service.sftp.externalTrafficPolicy` | `Local` | Keeps partners' real IPs for allowlists |
 | `service.sftp.loadBalancerSourceRanges` | `[]` | Cloud firewall: who may reach the port at all |
 | `service.sftp.annotations` | `{}` | Cloud load balancer options (internal LB, static IP and so on) |
-| `service.http.port` / `annotations` | `8080` / `{}` | The internal metrics, health and UI service |
+| `service.http.port` / `annotations` | `8080` / `{}` | The internal metrics, health and API service |
 | `persistence.enabled` / `size` / `storageClass` / `accessModes` | `true` / `2Gi` / default / `[ReadWriteOnce]` | Disk per pod for the spool and queue |
 | `gitSync.enabled` / `repo` / `ref` / `path` / `period` | off / – / `main` / `sftpgate.yaml` / `30s` | Config from git |
 | `gitSync.extraEnv` | `[]` | git-sync credentials for private repositories |
@@ -827,7 +840,7 @@ At least one of `private_key` or `password` is needed. Give the partner your
 | `metrics.serviceMonitor.enabled` / `interval` / `labels` | off / `30s` / `{}` | Prometheus Operator scraping |
 | `metrics.prometheusRule.enabled` / `labels` | off / `{}` | The 11 alert rules |
 | `metrics.grafanaDashboard.enabled` / `labels` | off / `grafana_dashboard: "1"` | Dashboard for the Grafana sidecar |
-| `ingress.enabled` / `className` / `host` / `annotations` / `tls` | off | Web access to the UI and API |
+| `ingress.enabled` / `className` / `host` / `annotations` / `tls` | off | Web access to the API (and admin calls, if allowed) |
 | `podDisruptionBudget.enabled` / `minAvailable` | off / `1` | Keep pods up during cluster maintenance |
 | `resources` | 100m CPU, 128Mi requested, 512Mi limit | Pod size |
 | `terminationGracePeriodSeconds` | `45` | Time to finish uploads on shutdown |
@@ -856,8 +869,8 @@ gitSync:
 | Process is alive | `curl localhost:8080/healthz` (Docker: `docker ps` shows healthy) |
 | Buckets reachable | `curl localhost:8080/readyz` |
 | A partner can log in | `sftp -i key -P 22 account@host` |
-| What's happening | UI at `/ui/`, or `docker logs` / `kubectl logs` |
-| Which config is live | UI header, or `curl -u x:TOKEN localhost:8080/api/v1/status` |
+| What's happening | Grafana, `GET /api/v1/events`, or `docker logs` / `kubectl logs` |
+| Which config is live | `curl -H "Authorization: Bearer $TOKEN" localhost:8080/api/v1/status` |
 | Metrics | `curl localhost:8080/metrics` |
 
 ---

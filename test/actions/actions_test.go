@@ -328,6 +328,40 @@ func TestGiveUpAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+// Retry puts failed jobs back with their attempts reset, and they run again.
+func TestRetryFailedJobs(t *testing.T) {
+	e := newEnv(t)
+	e.hook.fail(100)
+	e.upload("/hook", "a.csv", []byte("x"))
+	for range 3 {
+		e.runner.RunDue(context.Background())
+		e.now = e.now.Add(time.Hour)
+	}
+	id := onlyJob(t, e.queued("failed")).ID
+
+	if _, err := e.runner.Retry("no-such-job"); !errors.Is(err, actions.ErrNoJob) {
+		t.Fatalf("unknown job: err = %v, want ErrNoJob", err)
+	}
+	if n, err := e.runner.Retry(id); err != nil || n != 1 {
+		t.Fatalf("Retry = %d, %v", n, err)
+	}
+	if len(e.queued("failed")) != 0 {
+		t.Fatal("a retried job must leave failed")
+	}
+	if job := onlyJob(t, e.queued("")); job.Attempt != 0 || job.LastError != "" {
+		t.Fatalf("retried job must start over, got %+v", job)
+	}
+
+	e.hook.fail(0)
+	e.runner.RunDue(context.Background())
+	if len(e.queued("")) != 0 || len(e.queued("failed")) != 0 {
+		t.Fatal("the retried job must run and finish")
+	}
+	if n, err := e.runner.Retry(""); err != nil || n != 0 {
+		t.Fatalf("Retry all with nothing failed = %d, %v", n, err)
+	}
+}
+
 func TestQueueSurvivesRestart(t *testing.T) {
 	e := newEnv(t)
 	e.upload("/hook", "a.csv", []byte("x"))

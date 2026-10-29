@@ -101,23 +101,45 @@ func (s *Scheduler) build(ctx context.Context, cfg *config.Config) *cron.Cron {
 	return c
 }
 
-// errBusy is returned when a transfer is started while it is still running.
-var errBusy = errors.New("transfer is still running from last time")
+// Errors from RunNow and Start.
+var (
+	ErrBusy       = errors.New("transfer is still running from last time")
+	ErrNoTransfer = errors.New("no transfer with that name")
+)
 
 // RunNow runs one transfer right away and waits for it. A transfer never
 // runs twice at the same time: a run that is due while the last one is
 // still going is skipped.
 func (s *Scheduler) RunNow(ctx context.Context, name string) error {
 	if !s.claim(name) {
-		slog.Warn("skipping transfer run", "transfer", name, "reason", errBusy)
-		return errBusy
+		slog.Warn("skipping transfer run", "transfer", name, "reason", ErrBusy)
+		return ErrBusy
 	}
 	defer s.release(name)
+	return s.run(ctx, name)
+}
 
+// Start runs one transfer in the background, for the admin API. It returns
+// at once: ErrNoTransfer or ErrBusy, or nil when the run has started.
+func (s *Scheduler) Start(ctx context.Context, name string) error {
+	if find(s.Config(), name) == nil {
+		return ErrNoTransfer
+	}
+	if !s.claim(name) {
+		return ErrBusy
+	}
+	go func() {
+		defer s.release(name)
+		_ = s.run(ctx, name)
+	}()
+	return nil
+}
+
+func (s *Scheduler) run(ctx context.Context, name string) error {
 	cfg := s.Config()
 	t := find(cfg, name)
 	if t == nil {
-		return fmt.Errorf("no transfer named %q", name)
+		return fmt.Errorf("%w: %q", ErrNoTransfer, name)
 	}
 
 	run := &run{s: s, cfg: cfg, t: t, ctx: ctx, started: s.Now()}

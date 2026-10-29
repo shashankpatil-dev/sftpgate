@@ -96,18 +96,28 @@ server:
   timezone: Asia/Kolkata
 
 # -----------------------------------------------------------------------------
-# http: health checks, metrics, and the read-only web UI and API
+# http: health checks, metrics, the read-only API and the admin calls
 # -----------------------------------------------------------------------------
 http:
   # Port for /healthz, /readyz and /metrics (Prometheus). Default ":8080".
   # Keep it inside the cluster; don't expose it to the internet.
   listen: ":8080"
 
-  # Tokens that open the read-only UI (/ui) and API (/api): sessions, recent
-  # audit events, queued actions. No tokens = UI and API are off.
-  # Send one as "Authorization: Bearer <token>".
+  # Tokens that open the read-only API (/api/v1/...): status, sessions,
+  # recent audit events, queued actions, the config. No tokens = API is off.
+  # Send one as "Authorization: Bearer <token>". At least 16 characters.
   tokens:
-    - "${env:SFTPGATE_UI_TOKEN}"
+    - "${env:SFTPGATE_API_TOKEN}"
+
+  # The only API calls that change something. Off unless both are set, and
+  # only the operations listed in allow exist; others answer 404.
+  #   run_transfer:  POST /api/v1/transfers/<name>/run  (run it now)
+  #   retry_actions: POST /api/v1/actions/retry[?job=<id>]  (retry failed jobs)
+  # Admin tokens must differ from the read-only ones, work only as a Bearer
+  # header, and every call is audited. Leave this out unless you need it.
+  admin:
+    tokens: ["${env:SFTPGATE_ADMIN_TOKEN}"]
+    allow: [run_transfer, retry_actions]
 
 # -----------------------------------------------------------------------------
 # storages: the buckets where files really live, each with a short name
@@ -209,7 +219,7 @@ accounts:
   # ---- A partner that uploads files, with every protection on ----
   - # Login name. Lowercase letters, digits, - and _.
     name: razorpay
-    # Free text, shown in the UI.
+    # Free text, shown by the API.
     description: Daily settlement files
 
     auth:
@@ -327,7 +337,7 @@ remotes:
 # With several pods, transfers run on ONE pod only, so each file moves once.
 transfers:
   # PULL: fetch files FROM a remote server INTO our bucket.
-  - # A unique name; it appears in logs, metrics and the UI.
+  - # A unique name; it appears in logs, metrics and the API.
     name: bank-statements
     # When to run, in cron format: "minute hour day month weekday", in
     # server.timezone. "0 6 * * *" = every day at 06:00.

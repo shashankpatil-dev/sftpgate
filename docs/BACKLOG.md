@@ -4,12 +4,7 @@ Ideas and known gaps, not scheduled yet. Newest first.
 
 ## Features
 
-- **Remove the HTML UI; keep only the essential JSON API.** Grafana, logs and
-  traces already show sessions and events better, and the UI adds code and a
-  login surface. Keep, off by default and token-protected: open sessions,
-  pending and failed actions, plus two new calls: **run a transfer now** and
-  **retry a failed action**. Scoped tokens (limited to some accounts) apply to
-  the API only.
+- **Scoped API tokens**, limited to some accounts or transfers.
 - **Complete, well-named traces usable for alerts and visibility.** Today only
   `sftp.session`, `storage.write`, `action.run` and `action.<step>` exist. Add:
   - `sftp.login` (method, result);

@@ -41,12 +41,13 @@ Security fixes go into the latest minor release. Upgrade to it to receive them.
   connection limits.
 - Reaching files outside an account's folders (the folder jail), or doing
   operations its permissions don't allow.
-- Secrets leaking: through logs, the web UI or API, traces, error messages,
+- Secrets leaking: through logs, the API, traces, error messages,
   or object metadata.
 - Weak cryptography being accepted (SHA-1 must always be refused).
 - Files being corrupted, lost, or reported as saved when they weren't.
-- The read-only web UI or API changing anything, or being usable without a
-  valid token.
+- The read-only API changing anything, or being usable without a valid
+  token; an admin call working when it isn't allowed in `http.admin.allow`,
+  or with anything but an admin token.
 - Problems in the container image or Helm chart defaults (privileges,
   writable filesystem, exposed endpoints).
 

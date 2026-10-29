@@ -237,6 +237,45 @@ func TestHTTPTokens(t *testing.T) {
 	}
 }
 
+func TestAdminValidation(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	withHTTP := func(h string) string {
+		return strings.Replace(base(key), "storages:", "http:\n"+h+"\nstorages:", 1)
+	}
+	t.Setenv("READ_TOKEN", "0123456789abcdef-read")
+	t.Setenv("ADMIN_TOKEN", "0123456789abcdef-admin")
+
+	cfg, err := config.Parse([]byte(withHTTP(`  tokens: ["${env:READ_TOKEN}"]`)), config.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.Admin.Allows(config.RunTransfer) || cfg.HTTP.Admin.Allows(config.RetryActions) {
+		t.Fatal("admin calls must be off by default")
+	}
+
+	cfg, err = config.Parse([]byte(withHTTP(`  admin: { tokens: ["${env:ADMIN_TOKEN}"], allow: [run_transfer] }`)), config.Options{})
+	if err != nil {
+		t.Fatalf("valid admin settings rejected: %v", err)
+	}
+	if !cfg.HTTP.Admin.Allows(config.RunTransfer) || cfg.HTTP.Admin.Allows(config.RetryActions) {
+		t.Fatal("only the listed operation may be on")
+	}
+
+	for h, want := range map[string]string{
+		`  admin: { tokens: ["${env:ADMIN_TOKEN}"] }`:                                                             "http.admin.allow: list the operations",
+		`  admin: { allow: [run_transfer] }`:                                                                      "http.admin.tokens: needed when http.admin.allow is set",
+		`  admin: { tokens: ["${env:ADMIN_TOKEN}"], allow: [delete_all] }`:                                        `http.admin.allow[0]: unknown operation "delete_all"`,
+		`  admin: { tokens: ["${env:ADMIN_TOKEN}"], allow: [run_transfer, run_transfer] }`:                        `"run_transfer" is listed twice`,
+		`  admin: { tokens: ["inline-admin-token-here"], allow: [run_transfer] }`:                                 "http.admin.tokens[0]: inline secret not allowed",
+		"  tokens: [\"${env:READ_TOKEN}\"]\n  admin: { tokens: [\"${env:READ_TOKEN}\"], allow: [retry_actions] }": "must differ from every read-only token",
+	} {
+		if _, err := config.Parse([]byte(withHTTP(h)), config.Options{}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want %q, got %v", h, want, err)
+		}
+	}
+}
+
 func TestTransferValidation(t *testing.T) {
 	setHash(t)
 	key := hostKeyFile(t)

@@ -113,8 +113,11 @@ server:
     block: 15m                               # default 15m
 
 http:
-  listen: ":8080"                            # metrics, health, [v0.3] api/ui
-  tokens: ["${env:SFTPGATE_UI_TOKEN}"]       # [v0.3] required if api/ui enabled
+  listen: ":8080"                            # metrics, health, api
+  tokens: ["${env:SFTPGATE_API_TOKEN}"]       # read-only api; off when empty
+  admin:                                     # [v0.4] off unless both set
+    tokens: ["${env:SFTPGATE_ADMIN_TOKEN}"]  # must differ from tokens
+    allow: [run_transfer, retry_actions]
 
 storages:                                    # name -> gocloud blob URL
   recon-raw: "gs://acme-recon-raw"
@@ -124,7 +127,7 @@ storages:                                    # name -> gocloud blob URL
 
 accounts:
   - name: razorpay                           # = SSH username; [a-z0-9][a-z0-9._-]{0,63}
-    description: Settlement reconciliation   # free text, shown in UI
+    description: Settlement reconciliation   # free text, shown by the api
     auth:
       mode: all                              # any | all ; default any
       public_keys:                           # authorized_keys format lines
@@ -558,7 +561,7 @@ type Registry struct { mu sync.Mutex; byID map[string]*Session }
 func (r *Registry) Add(s *Session) error   // enforces account.MaxSessions
 func (r *Registry) Remove(id string)
 func (r *Registry) CloseWhere(pred func(*Session) bool)
-func (r *Registry) Snapshot() []SessionInfo // for metrics/UI
+func (r *Registry) Snapshot() []SessionInfo // for metrics/API
 ```
 
 ---
@@ -941,10 +944,11 @@ GET /metrics            promhttp.Handler()                     no auth
 GET /healthz            200 "ok" if process up                 no auth
 GET /readyz             200 if config loaded && storages ping  no auth
 GET /api/v1/...         [v0.3] see 11                          token
-GET /ui/...             [v0.3]                                 token
+POST /api/v1/transfers/{name}/run   [v0.4] see 11             admin token, if allowed
+POST /api/v1/actions/retry          [v0.4] see 11             admin token, if allowed
 ```
 
-Only `GET` routes are registered (`mux.HandleFunc("GET /api/v1/sessions", …)`). Everything else returns 405 from the mux, so the API is read-only by construction.
+Read-only routes are `GET` only; other methods get 405 from the mux. The two `POST` routes are the only ones that change anything, and they answer 404 unless `http.admin.allow` lists them.
 
 ---
 
@@ -1032,9 +1036,9 @@ type Current struct {          // the "current file" flowing through steps
 
 ---
 
-## 11. Read-only API and UI [v0.3]
+## 11. API and admin calls
 
-> **As built in v0.3.** Routes exist only while `http.tokens` is set (otherwise 404). Tokens are secret references of at least 16 characters, compared in constant time on their SHA-256. HTML pages send a strict CSP (`default-src 'none'; style-src 'self'`) and no JS. API answers are `no-store`. The overview page also lists recent failed and denied events. `revision` comes from `SFTPGATE_REVISION`, or from the git-sync worktree folder name in the config's real path.
+> **As built.** Read-only routes exist only while `http.tokens` is set (otherwise 404). Tokens are secret references of at least 16 characters, compared in constant time on their SHA-256. API answers are `no-store`. The HTML UI of v0.3 was removed in v0.4; `/ui/` is a 404. `revision` comes from `SFTPGATE_REVISION`, or from the git-sync worktree folder name in the config's real path.
 
 
 | Endpoint | Returns |
@@ -1045,8 +1049,19 @@ type Current struct {          // the "current file" flowing through steps
 | `GET /api/v1/actions` | pending + failed jobs (read from the queue dir) |
 | `GET /api/v1/config` | `Raw` (pre-interpolation YAML, so secrets appear only as `${…}` references) |
 
-- **Auth:** HTTP Basic, with the password compared in constant time against `http.tokens` (the username is ignored). Browsers prompt natively, so no login page or JS is needed.
-- **UI:** `html/template` + `embed.FS`, pages `/ui`, `/ui/sessions`, `/ui/events`, `/ui/actions`, `/ui/config`, with `<meta http-equiv="refresh" content="10">`. One small CSS file. No forms, no POST.
+- **Auth:** `Authorization: Bearer <token>` (or a Basic login with the token as password), compared in constant time against `http.tokens`.
+
+**Admin calls [v0.4]** (`internal/web/admin.go`). Checked on every request against the live config, so a reload switches them on or off:
+
+| Endpoint | Allow entry | Does | Answers |
+|---|---|---|---|
+| `POST /api/v1/transfers/{name}/run` | `run_transfer` | `Scheduler.Start`: claims the transfer and runs it in a goroutine with the server's ctx | 202; 404 `ErrNoTransfer`; 409 `ErrBusy`, or this replica doesn't run transfers |
+| `POST /api/v1/actions/retry[?job=<id>]` | `retry_actions` | `Runner.Retry`: moves `failed/<id>.json` (or all) back to the queue with `attempt=0`, then wakes the dispatcher | 200 `{"retried": n}`; 404 `ErrNoJob` |
+
+- Not listed in `allow` (or no admin tokens): 404, the route looks absent.
+- Admin tokens: secret references, 16+ characters, never equal to a read-only token (checked by `validate`), Bearer header only, so a browser can't send them on its own.
+- Every call, accepted or refused, emits an `admin` audit event with `method` (the operation), `ip`, and `transfer` or `job`.
+- Failed jobs are per pod (on its spool disk), so retry acts on the pod reached.
 - History beyond the ring buffer lives in the audit log pipeline (Loki/Cloud Logging). `shortcut: ring buffer is in-memory and per-replica; that's by design, since durable history is the log sink's job.`
 
 ---

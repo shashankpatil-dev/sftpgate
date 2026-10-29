@@ -4,6 +4,7 @@ package config
 
 import (
 	"net/netip"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -72,12 +73,32 @@ type Throttle struct {
 	Block       time.Duration `yaml:"block"`
 }
 
-// HTTP holds the settings for the metrics, health, API and UI endpoint.
+// HTTP holds the settings for the metrics, health and API endpoint.
 type HTTP struct {
 	Listen string `yaml:"listen"`
 
-	// Tokens open the read-only API and UI. With no tokens they are off.
+	// Tokens open the read-only API. With no tokens it is off.
 	Tokens []string `yaml:"tokens"`
+
+	Admin Admin `yaml:"admin"`
+}
+
+// Admin operations, the only API calls that change anything.
+const (
+	RunTransfer  = "run_transfer"
+	RetryActions = "retry_actions"
+)
+
+// Admin opens the API calls that change something. They are off unless
+// admin tokens are set and the operation is listed in Allow.
+type Admin struct {
+	Tokens []string `yaml:"tokens"`
+	Allow  []string `yaml:"allow"`
+}
+
+// Allows reports whether the admin operation op is switched on.
+func (a Admin) Allows(op string) bool {
+	return len(a.Tokens) > 0 && slices.Contains(a.Allow, op)
 }
 
 // Account is one SFTP login: a vendor, a partner or an internal service.

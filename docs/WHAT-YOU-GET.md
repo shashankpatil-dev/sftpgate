@@ -18,7 +18,7 @@ How to set it up: [ONBOARDING.md](ONBOARDING.md). Terms: [GLOSSARY.md](GLOSSARY.
                                      │
                                      ├─▶ optional: decrypt, copy, notify
                                      ├─▶ optional: fetch from or send to partners on a schedule
-                                     └─▶ audit log, metrics, alerts, traces, read-only UI
+                                     └─▶ audit log, metrics, alerts, traces, JSON API
 ```
 
 SFTPgate is a **bridge with a guard**. The data always lives in your buckets.
@@ -77,13 +77,16 @@ SFTPgate only holds a file for the few seconds it takes to arrive completely.
 Each is a named **action** defined once and run from the **hooks** of any folder
 or transfer (before or after an upload, download, push or pull). Actions of
 "after" hooks are **retried automatically** with growing waits, survive
-restarts, and are visible in the UI and alerts if they give up.
+restarts, and are visible in the API and alerts if they give up, and can be retried with
+one admin call.
 
 ### Seeing what's happening
-- **Read-only web UI** (`/ui/`): open sessions, recent events with filters,
-  action jobs, and the running config and its git commit. It has no edit
-  buttons, by design.
-- **JSON API** (`/api/v1/`): the same data for scripts and other tools.
+- **JSON API** (`/api/v1/`): open sessions, recent events with filters,
+  action jobs, and the running config and its git commit, for scripts and
+  tools. Read-only.
+- **Two admin calls, off by default:** run a transfer now, and retry failed
+  action jobs. Each needs its own admin token and must be switched on in
+  `http.admin.allow`. Every call is audited.
 - **Grafana dashboard** (19 panels): logins, connections, uploads and downloads
   per partner, data moved, transfer times, storage errors, denied requests,
   action jobs, scheduled transfers, and the config version.
@@ -150,24 +153,25 @@ Prometheus Operator usually has one already).
 | What | Where |
 |---|---|
 | SFTP, for partners | port 22 (Kubernetes) or the port you map (Docker) |
-| Web UI | `http://<host>:8080/ui/` (needs `http.tokens`) |
-| API | `http://<host>:8080/api/v1/status`, `/sessions`, `/events`, `/actions`, `/config` |
+| API | `http://<host>:8080/api/v1/status`, `/sessions`, `/events`, `/actions`, `/config` (needs `http.tokens`) |
+| Admin calls | `POST /api/v1/transfers/<name>/run`, `POST /api/v1/actions/retry` (needs `http.admin`) |
 | Metrics | `http://<host>:8080/metrics` |
 | Health | `http://<host>:8080/healthz`, `/readyz` |
 | Audit log | the container's output (`docker logs`, `kubectl logs`, or your log system) |
 | Dashboard and alerts | `deploy/helm/sftpgate/files/` (installed by Helm with `metrics.*` values) |
-| Failed action jobs | `<spool_dir>/queue/failed/` on the SFTPgate disk, and the UI's Actions page |
+| Failed action jobs | `<spool_dir>/queue/failed/` on the SFTPgate disk, and `GET /api/v1/actions` |
 
 ## 7. What SFTPgate deliberately does not do
 
 These keep it small, safe and focused:
 
 - **No FTP, FTPS or web upload page.** SFTP only.
-- **No editing in the UI.** All changes go through git.
+- **No web UI, and no config editing over the API.** All changes go through git;
+  the admin calls only run a transfer or retry jobs.
 - **No partner self-service** (password resets, key uploads). You control access.
 - **No file storage of its own.** Your buckets keep the data.
 - **No old, weak encryption** (SHA-1). Partners on very old software must upgrade.
 - **No virus scanning or content inspection.** Do that downstream, from the
   bucket or from the webhook.
-- **One view for all accounts in the UI.** It's built for the operations team,
+- **One view for all accounts in the API.** It's built for the operations team,
   not for each partner.

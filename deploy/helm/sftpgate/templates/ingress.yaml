@@ -21,13 +21,7 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          # Only the UI and API. Metrics and health checks stay inside the cluster.
-          - path: /ui
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "sftpgate.fullname" . }}-http
-                port: { name: http }
+          # Only the API. Metrics and health checks stay inside the cluster.
           - path: /api
             pathType: Prefix
             backend:

@@ -60,7 +60,7 @@ spec:
       protocol: TCP
 ---
 # Source: sftpgate/templates/service.yaml
-# Metrics, health checks and the read-only UI and API, inside the cluster.
+# Metrics, health checks and the API, inside the cluster.
 apiVersion: v1
 kind: Service
 metadata:

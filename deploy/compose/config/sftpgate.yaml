@@ -13,9 +13,13 @@ server:
   # Retry failed actions quickly, so the demo shows results fast.
   queue: { backoff: 2s }
 
-# Opens the read-only web UI at http://localhost:8080/ui/
+# Opens the read-only API at http://localhost:8080/api/v1/ and, with a
+# separate token, the two admin calls. Both are off unless set like this.
 http:
-  tokens: ["${env:SFTPGATE_UI_TOKEN}"]
+  tokens: ["${env:SFTPGATE_API_TOKEN}"]
+  admin:
+    tokens: ["${env:SFTPGATE_ADMIN_TOKEN}"]
+    allow: [run_transfer, retry_actions]
 
 storages:
   s3: "s3://recon-raw?endpoint=http://s3:9090&use_path_style=true&region=us-east-1"

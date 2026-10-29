@@ -10,9 +10,9 @@ Try it from your machine:
   kubectl port-forward -n {{ .Release.Namespace }} service/{{ include "sftpgate.fullname" . }} 2222:{{ .Values.service.sftp.port }}
   sftp -P 2222 <account>@localhost
 
-Metrics, health and the read-only UI (when http.tokens is set):
+Metrics, health and the read-only API (when http.tokens is set):
   kubectl port-forward -n {{ .Release.Namespace }} service/{{ include "sftpgate.fullname" . }}-http 8080:{{ .Values.service.http.port }}
-  open http://localhost:8080/ui/
+  curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/status
 
 Host key fingerprint, to send to partners:
   kubectl get secret {{ .Values.hostKeys.existingSecret }} -n {{ .Release.Namespace }} -o jsonpath='{.data.ssh_host_ed25519_key}' | base64 -d | ssh-keygen -lf /dev/stdin

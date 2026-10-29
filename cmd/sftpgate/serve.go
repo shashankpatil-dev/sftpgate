@@ -83,6 +83,18 @@ func serve(path string) error {
 	if err != nil {
 		return err
 	}
+	// The admin API's runs outlive the request, so they get the server's ctx.
+	var runTransfer func(string) error
+	host, _ := os.Hostname()
+	if transfers.EnabledHere(os.Getenv, host) {
+		sched := transfers.NewScheduler(r.current.Load, buckets, cfg.Server.SpoolDir)
+		sched.Before, sched.Enqueue = runner.Before, runner.Add
+		runTransfer = func(name string) error { return sched.Start(ctx, name) }
+		go sched.Run(ctx)
+	} else if len(cfg.Transfers) > 0 {
+		slog.Info("scheduled transfers run on another replica", "host", host)
+	}
+
 	httpSrv := &http.Server{
 		Addr: cfg.HTTP.Listen,
 		Handler: web.Handler(web.Source{
@@ -93,6 +105,9 @@ func serve(path string) error {
 			Ready:    func(ctx context.Context) error { return buckets.Ping(ctx, r.current.Load()) },
 			Sessions: srv.Sessions,
 			Actions:  runner.List,
+
+			RunTransfer:  runTransfer,
+			RetryActions: runner.Retry,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -104,15 +119,6 @@ func serve(path string) error {
 	go r.run(ctx, cfg.Server.ReloadInterval)
 	go watchSpool(ctx, cfg.Server.SpoolDir)
 	go runner.Run(ctx)
-
-	host, _ := os.Hostname()
-	if transfers.EnabledHere(os.Getenv, host) {
-		sched := transfers.NewScheduler(r.current.Load, buckets, cfg.Server.SpoolDir)
-		sched.Before, sched.Enqueue = runner.Before, runner.Add
-		go sched.Run(ctx)
-	} else if len(cfg.Transfers) > 0 {
-		slog.Info("scheduled transfers run on another replica", "host", host)
-	}
 
 	setMemoryLimit()
 	startProfiler()

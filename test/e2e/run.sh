@@ -12,7 +12,8 @@ PROMETHEUS=${PROMETHEUS:-http://localhost:9090}
 GRAFANA=${GRAFANA:-http://localhost:3000}
 JAEGER=${JAEGER:-http://localhost:16686}
 KEY=${KEY:-.dev/keys/demo_user}
-UI_TOKEN=${UI_TOKEN:-dev-only-ui-token}
+API_TOKEN=${API_TOKEN:-dev-only-api-token}
+ADMIN_TOKEN=${ADMIN_TOKEN:-dev-only-admin-token}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -113,7 +114,7 @@ fi
 if exists "/recon/bad-$run_id.csv"; then fail "a refused file was stored"; fi
 # The reason goes to the client in the SFTP status message. OpenSSH's sftp
 # only prints "Failure", so check what was recorded instead.
-grep -q 'CSV header is' <<<"$(curl -fs -u "e2e:$UI_TOKEN" "$HTTP/api/v1/events?event=upload&account=demo&result=denied")" \
+grep -q 'CSV header is' <<<"$(curl -fs -H "Authorization: Bearer $API_TOKEN" "$HTTP/api/v1/events?event=upload&account=demo&result=denied")" \
   || fail "the refusal and its reason are not in the audit log"
 
 echo "checking after_upload with pgp_decrypt (signed), check and copy..."
@@ -183,14 +184,26 @@ echo "checking metrics..."
 grep -q 'sftpgate_operations_total{account="demo",folder="/s3",op="upload",result="ok"}' <<<"$(curl -fs "$HTTP/metrics")" \
   || fail "upload metric missing"
 
-echo "checking the read-only API and UI..."
-grep -q '"ready": true' <<<"$(curl -fs -u "e2e:$UI_TOKEN" "$HTTP/api/v1/status")" || fail "API status is not ready"
-grep -q '"result": "ok"' <<<"$(curl -fs -u "e2e:$UI_TOKEN" "$HTTP/api/v1/events?event=upload&account=demo")" || fail "API shows no upload events"
-grep -q 'Open sessions' <<<"$(curl -fs -u "e2e:$UI_TOKEN" "$HTTP/ui/")" || fail "UI overview does not load"
-status=$(curl -s -o /dev/null -w '%{http_code}' "$HTTP/ui/")
-[ "$status" = "401" ] || fail "UI without a token answered $status, want 401"
-status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -u "e2e:$UI_TOKEN" "$HTTP/api/v1/status")
-[ "$status" = "405" ] || fail "POST to the API answered $status, want 405"
+echo "checking the read-only API..."
+api=(-H "Authorization: Bearer $API_TOKEN")
+admin=(-H "Authorization: Bearer $ADMIN_TOKEN")
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+grep -q '"ready": true' <<<"$(curl -fs "${api[@]}" "$HTTP/api/v1/status")" || fail "API status is not ready"
+grep -q '"result": "ok"' <<<"$(curl -fs "${api[@]}" "$HTTP/api/v1/events?event=upload&account=demo")" || fail "API shows no upload events"
+[ "$(code "$HTTP/api/v1/status")" = 401 ] || fail "API without a token must answer 401"
+[ "$(code -X POST "${api[@]}" "$HTTP/api/v1/status")" = 405 ] || fail "POST to a read-only call must answer 405"
+[ "$(code "${api[@]}" "$HTTP/ui/")" = 404 ] || fail "the HTML UI is removed, /ui/ must answer 404"
+
+echo "checking the admin calls..."
+[ "$(code -X POST "${api[@]}" "$HTTP/api/v1/transfers/demo-push/run")" = 401 ] || fail "a read-only token must not run a transfer"
+[ "$(code -X POST -u "e2e:$ADMIN_TOKEN" "$HTTP/api/v1/transfers/demo-push/run")" = 401 ] || fail "admin calls take only a Bearer token"
+[ "$(code -X POST "${admin[@]}" "$HTTP/api/v1/transfers/no-such/run")" = 404 ] || fail "an unknown transfer must answer 404"
+# demo-push runs every 5 seconds, so it may be busy right now: 202 or 409.
+status=$(code -X POST "${admin[@]}" "$HTTP/api/v1/transfers/demo-push/run")
+[ "$status" = 202 ] || [ "$status" = 409 ] || fail "run transfer now answered $status, want 202 or 409"
+grep -q '"retried"' <<<"$(curl -fs -X POST "${admin[@]}" "$HTTP/api/v1/actions/retry")" || fail "retry actions failed"
+[ "$(code -X POST "${admin[@]}" "$HTTP/api/v1/actions/retry?job=no-such")" = 404 ] || fail "retrying an unknown job must answer 404"
+grep -q '"method": "run_transfer"' <<<"$(curl -fs "${api[@]}" "$HTTP/api/v1/events?event=admin")" || fail "admin calls are not audited"
 
 echo "checking that Prometheus scrapes sftpgate..."
 for _ in $(seq 1 30); do

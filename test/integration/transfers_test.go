@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -266,4 +267,30 @@ func TestScheduleRunsTransfers(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("the @every 1s schedule never ran the transfer")
+}
+
+// Start (the admin API's "run now") runs a transfer in the background, and
+// refuses a name that isn't configured.
+func TestStartRunsInBackground(t *testing.T) {
+	e := newTransferEnv(t, nil)
+	put(t, e.mine, "outbox/gst-oct.csv", "returns")
+
+	if err := e.sched.Start(context.Background(), "no-such"); !errors.Is(err, transfers.ErrNoTransfer) {
+		t.Fatalf("unknown transfer: err = %v", err)
+	}
+	if err := e.sched.Start(context.Background(), "push-and-move"); err != nil {
+		t.Fatal(err)
+	}
+	// Once the run is done its claim is released, and a run can start again.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, sent := read(e.partner, "key/gst-oct.csv")
+		if sent && !errors.Is(e.sched.RunNow(context.Background(), "push-and-move"), transfers.ErrBusy) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background run never finished")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

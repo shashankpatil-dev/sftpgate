@@ -134,13 +134,46 @@ func (r *Runner) Add(u vfs.FileEvent) error {
 		return err
 	}
 	metrics.Actions.WithLabelValues("queue", audit.OK).Inc()
+	r.poke()
+	return nil
+}
 
-	// Wake the dispatcher so the job starts now, not on the next tick.
+// ErrNoJob is returned by Retry for a job id that is not in failed.
+var ErrNoJob = errors.New("no failed job with that id")
+
+// Retry moves failed jobs back into the queue with their attempts reset:
+// the job with this id, or every failed job when id is "". It returns how
+// many were moved.
+func (r *Runner) Retry(id string) (int, error) {
+	failed, err := loadAll(filepath.Join(r.Dir, "failed", "*.json"))
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, job := range failed {
+		if id != "" && job.ID != id {
+			continue
+		}
+		job.Attempt, job.NextAt, job.LastError = 0, r.Now(), ""
+		if err := r.save(job, r.jobPath(job.ID)); err != nil {
+			return n, err
+		}
+		_ = os.Remove(filepath.Join(r.Dir, "failed", job.ID+".json"))
+		n++
+	}
+	if id != "" && n == 0 {
+		return 0, ErrNoJob
+	}
+	r.poke()
+	return n, nil
+}
+
+// poke wakes the dispatcher so new jobs start now, not on the next tick.
+func (r *Runner) poke() {
 	select {
 	case r.wake <- struct{}{}:
 	default:
 	}
-	return nil
 }
 
 // Run processes the queue until ctx is cancelled.
@@ -225,7 +258,7 @@ func (r *Runner) dueJobs() []Job {
 }
 
 // List returns the jobs waiting in the queue and the jobs that gave up,
-// oldest first, for the web UI.
+// oldest first, for the API.
 func (r *Runner) List() (pending, failed []Job, err error) {
 	if pending, err = loadAll(filepath.Join(r.Dir, "*.json")); err != nil {
 		return nil, nil, err

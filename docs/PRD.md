@@ -23,7 +23,7 @@ Every account, key, IP rule, folder and permission is declared in git and review
 ## 3. Principles (apply to every decision)
 
 1. **Strong, narrow purpose.** Secure file exchange with partners and internal services. Anything else is out.
-2. **Git is the only source of truth.** No runtime edits through the UI or API. The UI is read-only.
+2. **Git is the only source of truth.** No runtime edits through the API: the only calls that act (run a transfer now, retry failed actions) are off by default and never change the config.
 3. **The best code is code never written.** Use proven libraries for SSH/SFTP/storage. Build only the glue that is our value.
 4. **Secure by default.** No shell, no forwarding, no plaintext secrets in config, deny unless allowed.
 5. **Boring to operate.** One binary, one config file, no database, stdout logs, Prometheus metrics.
@@ -53,12 +53,12 @@ Every account, key, IP rule, folder and permission is declared in git and review
 ### 6.1 Configuration (v0.1)
 - FR-1: The whole system is configured by one YAML file (`sftpgate.yaml`) with a versioned schema.
 - FR-2: Secrets are never written inline. Values support `${env:NAME}` and `${file:/path}` references. This works with GitHub Actions secrets, k8s Secrets, Docker secrets and External Secrets Operator, because each of them delivers secrets as env vars or files.
-- FR-35: `validate` **rejects** inline values in secret fields (password hashes, private keys, PGP keys and passphrases, webhook secrets, UI tokens). Public keys may be inline because they are not secret.
+- FR-35: `validate` **rejects** inline values in secret fields (password hashes, private keys, PGP keys and passphrases, webhook secrets, API and admin tokens). Public keys may be inline because they are not secret.
 - FR-36 (v0.2): `${secret:<url>}` reads a value directly from GCP Secret Manager or AWS Secrets Manager / Parameter Store at load time, with credentials from the runtime environment.
 - FR-3: Passwords are stored only as bcrypt hashes. The CLI provides `sftpgate hash-password`.
 - FR-4: `sftpgate validate <file>` checks the schema, references, CIDRs, keys and patterns, and exits non-zero on error (for CI on PRs).
 - FR-5: Hot reload on file change or SIGHUP. An invalid new config is rejected and the last good config keeps serving.
-- FR-6: The running config version (content hash, and git SHA if provided) is exposed in metrics and the UI.
+- FR-6: The running config version (content hash, and git SHA if provided) is exposed in metrics and the API.
 
 ### 6.2 Authentication (v0.1)
 - FR-7: Per-account public-key auth (multiple keys per account).
@@ -95,10 +95,10 @@ Every account, key, IP rule, folder and permission is declared in git and review
 - FR-27: Actions run asynchronously with retries. Pending work survives a restart. After the final failure the job is recorded as failed and visible in metrics and logs.
 - FR-28: The original upload is never modified by actions (the landing zone is immutable from SFTPgate's side).
 
-### 6.8 Read-only UI and API (v0.3)
-- FR-29: Read-only web UI: live sessions, recent transfers, recent auth failures, action status, effective config (secrets redacted), config version.
-- FR-30: Read-only JSON API with the same data. Protected by a bearer token.
-- FR-31: No endpoint can change state.
+### 6.8 API (v0.3, UI removed in v0.4)
+- FR-29: ~~Read-only web UI~~ removed in v0.4; Grafana, logs and traces cover it.
+- FR-30: Read-only JSON API: live sessions, recent events, action status, config as written, config version. Protected by a bearer token.
+- FR-31: No endpoint can change the config. v0.4 adds two admin calls (run a transfer now, retry failed actions), each off until allowed in config, with separate admin tokens, and audited.
 
 ### 6.9 Scheduled transfers (v0.3)
 - FR-32: Cron-scheduled `pull` (remote SFTP to storage) and `push` (storage to remote SFTP) jobs with host-key pinning.
@@ -124,7 +124,7 @@ Every account, key, IP rule, folder and permission is declared in git and review
 Stated explicitly so they don't creep in:
 
 - FTP, FTPS, WebDAV, HTTP upload portals.
-- Editing anything through the UI or API, and user self-service (password resets, key uploads).
+- Editing the config through the API, and user self-service (password resets, key uploads).
 - LDAP/AD/OIDC for SFTP logins (accounts are declared in git).
 - A database, multi-tenant SaaS mode, or a Kubernetes operator.
 - Resumable or append uploads, symlinks, hard links, chmod/chown semantics.
