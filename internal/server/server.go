@@ -176,10 +176,23 @@ func (s *Server) handle(c net.Conn) {
 
 	conn := newIdleConn(c, handshakeTimeout)
 	auth := &authenticator{cfg: cfg, ip: ip}
+	start := time.Now()
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, auth.sshConfig())
+	ev.User = auth.user
+
+	// Port checks and health probes connect and leave without a word: no
+	// trace for those. The spans start afterwards, backdated to the connect.
+	if err != nil && isProbe(ev, err) {
+		slog.Debug("connection closed before login", "ip", ip)
+		return
+	}
+	ctx, span := tracing.Tracer.Start(context.Background(), "sftp.session", trace.WithTimestamp(start),
+		trace.WithAttributes(attribute.String("client.address", ip.String())))
+	ev.TraceID = tracing.TraceID(ctx)
+	s.traceLogin(ctx, start, sshConn, err)
 	if err != nil {
-		ev.User = auth.user
 		s.loginFailed(ev, cfg, ip, err)
+		tracing.Finish(span, loginResult(err), err)
 		return
 	}
 	defer sshConn.Close()
@@ -198,21 +211,19 @@ func (s *Server) handle(c net.Conn) {
 	ev.KeyFP = sshConn.Permissions.Extensions[extKeyFP]
 	metrics.Auth.WithLabelValues(sess.account.Name, ev.Method, audit.OK).Inc()
 
+	span.SetAttributes(
+		tracing.Account.String(sess.account.Name),
+		tracing.Session.String(sess.id),
+		tracing.AuthMethod.String(ev.Method),
+	)
 	if err := s.addSession(sess); err != nil {
 		ev.Event, ev.Result, ev.Error = "auth_ok", audit.Denied, err.Error()
 		audit.Emit(ev)
+		tracing.Finish(span, audit.Denied, err)
 		return
 	}
 	defer s.removeSession(sess)
-
-	ctx, span := tracing.Tracer.Start(context.Background(), "sftp.session", trace.WithAttributes(
-		attribute.String("sftpgate.account", sess.account.Name),
-		attribute.String("sftpgate.session", sess.id),
-		attribute.String("sftpgate.auth_method", ev.Method),
-		attribute.String("client.address", ip.String()),
-	))
-	defer span.End()
-	ev.TraceID = tracing.TraceID(ctx)
+	defer tracing.Finish(span, audit.OK, nil)
 
 	ev.Event, ev.Result = "session_start", audit.OK
 	audit.Emit(ev)
@@ -226,7 +237,7 @@ func (s *Server) handle(c net.Conn) {
 }
 
 // handler builds the file handler for this session. It is kept on the
-// session so the web UI can read its byte counters.
+// session so the API can read its byte counters.
 func (sess *session) handler(ctx context.Context, cfg *config.Config, s *Server) *vfs.Handler {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -344,15 +355,39 @@ func (s *Server) reject(ev audit.Event, result, reason string) {
 //
 // It counts as one failure for the throttle, no matter how many keys the
 // client tried. Trying several keys is normal for OpenSSH clients.
+// isProbe reports whether a connection left before saying anything, like
+// a port check or a health probe.
+func isProbe(ev audit.Event, err error) bool {
+	return ev.User == "" && errors.Is(err, io.EOF)
+}
+
+// loginResult is "denied" for wrong credentials, "failed" for a handshake
+// that broke down (for example no common encryption).
+func loginResult(err error) string {
+	var authErr *ssh.ServerAuthError
+	if errors.As(err, &authErr) {
+		return audit.Denied
+	}
+	return audit.Failed
+}
+
+// traceLogin records the handshake and login as an sftp.login span.
+func (s *Server) traceLogin(ctx context.Context, start time.Time, conn *ssh.ServerConn, err error) {
+	_, login := tracing.Tracer.Start(ctx, "sftp.login", trace.WithTimestamp(start))
+	if err != nil {
+		tracing.Finish(login, loginResult(err), err)
+		return
+	}
+	login.SetAttributes(
+		tracing.Account.String(conn.Permissions.Extensions[extAccount]),
+		tracing.AuthMethod.String(conn.Permissions.Extensions[extMethod]),
+	)
+	tracing.Finish(login, audit.OK, nil)
+}
+
 func (s *Server) loginFailed(ev audit.Event, cfg *config.Config, ip netip.Addr, err error) {
 	var authErr *ssh.ServerAuthError
 	if !errors.As(err, &authErr) {
-		// Port checks and health probes connect and leave without a word:
-		// not worth a log line.
-		if ev.User == "" && errors.Is(err, io.EOF) {
-			slog.Debug("connection closed before login", "ip", ip)
-			return
-		}
 		// Anything else needs to be visible: a partner whose software can't
 		// agree on encryption with us would otherwise fail silently.
 		slog.Warn("ssh handshake failed", "ip", ip, "user", ev.User, "err", err)

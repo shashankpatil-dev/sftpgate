@@ -787,9 +787,20 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
 : A tag on a metric, like `account="razorpay"`, used to filter and group.
 
 **Tracing / OpenTelemetry / OTLP / span / trace**
-: Detailed timing of each operation. A **trace** is one session; each upload
-  or step inside it is a **span**. OpenTelemetry is the standard, and OTLP is
-  its sending format. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+: Detailed timing of each operation. A **trace** is one connection or one
+  transfer run; each login, upload, storage call or step inside it is a
+  **span**. OpenTelemetry is the standard, and OTLP is its sending format. Off
+  unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+**`sftpgate.result`**
+: The result on every span: `ok`, `denied` (refused: wrong password, a
+  permission, a failed check) or `failed` (something broke). Only `failed`
+  counts as an error, so alerts on trace errors mean real trouble.
+
+**Span metrics**
+: Metrics a tracing tool (Tempo, Jaeger, Datadog) works out from spans, like
+  "how long `sftp.upload` takes for razorpay". Good for alerts without adding
+  code.
 
 **Jaeger / Tempo**
 : Tools that show traces.

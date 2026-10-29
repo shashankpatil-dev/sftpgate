@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 )
 
@@ -142,6 +144,16 @@ func (s *Scheduler) run(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %q", ErrNoTransfer, name)
 	}
 
+	direction, remote := "push", ""
+	if t.Pull != nil {
+		direction, remote = "pull", t.Pull.From.Remote
+	} else {
+		remote = t.Push.To.Remote
+	}
+	// Each run is its own trace, whether the schedule or the API started it.
+	ctx, span := tracing.Tracer.Start(ctx, "transfer.run", trace.WithNewRoot(), trace.WithAttributes(
+		tracing.Transfer.String(name), tracing.Direction.String(direction), tracing.Remote.String(remote)))
+
 	run := &run{s: s, cfg: cfg, t: t, ctx: ctx, started: s.Now()}
 	var err error
 	if t.Pull != nil {
@@ -149,11 +161,13 @@ func (s *Scheduler) run(ctx context.Context, name string) error {
 	} else {
 		err = run.push()
 	}
+	span.SetAttributes(tracing.Moved.Int(run.moved), tracing.Skipped.Int(run.skipped), tracing.Failed.Int(run.failed))
+	tracing.End(span, err)
 
 	result := audit.OK
 	if err != nil {
 		result = audit.Failed
-		audit.Emit(audit.Event{Event: "transfer", Result: audit.Failed, Transfer: name, Error: err.Error()})
+		audit.Emit(audit.Event{Event: "transfer", Result: audit.Failed, Transfer: name, Error: err.Error(), TraceID: tracing.TraceID(ctx)})
 	}
 	metrics.TransferRuns.WithLabelValues(name, result).Inc()
 	slog.Info("transfer finished", "transfer", name, "moved", run.moved, "skipped", run.skipped, "failed", run.failed, "err", err)

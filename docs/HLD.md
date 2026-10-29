@@ -127,7 +127,7 @@ flowchart LR
 ### 3.7 Audit, metrics, traces
 - `audit.Emit(Event)` writes one JSON line through `log/slog`'s JSON handler to stdout (and an optional file).
 - Prometheus collectors are registered once. Label cardinality is bounded (account and folder names come from config, never from IPs or file paths).
-- OpenTelemetry tracer (v0.2) is a no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- OpenTelemetry tracer is a no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. One trace per connection and per transfer run; action jobs link back to their file. See LLD 8a.
 
 ### 3.8 Action runner (v0.2)
 - After a committed upload, writes a job file `queue/<id>.json`. N workers process jobs, run the actions of the folder's or transfer's `after_*` hook in order (v0.4: named `actions:` run from `hooks:`; `before_*` hooks run synchronously and can refuse a file), and retry with exponential backoff. On success the job file is deleted. After `max_attempts` it moves to `queue/failed/`.
@@ -347,7 +347,7 @@ flowchart LR
 | Host impersonation | Persistent host keys from a secret. Fingerprint is documented for vendors. |
 | Container compromise blast radius | Distroless, non-root, read-only root FS, single writable spool volume, least-privilege bucket IAM per storage. |
 | Audit tampering | Audit goes off-box via stdout collection. The recommended sink is a retention-locked (WORM) bucket. |
-| Sensitive file names leaking via traces | Spans never include file names or object keys (only account, folder, sizes, results). |
+| Sensitive file names leaking via traces | Spans never include file names or object keys (only account, folder, sizes, results); storage errors keep only their code. |
 | Unreviewed access changes | All changes go through git PRs. CI runs `sftpgate validate`. No runtime mutation endpoints exist. |
 
 ### 6.1 Secrets

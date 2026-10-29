@@ -10,8 +10,11 @@ import (
 	"io"
 	"maps"
 
+	"go.opentelemetry.io/otel/trace"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
+
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 )
 
 // PutOptions change how PutFile writes.
@@ -56,6 +59,18 @@ var ErrNotKept = errors.New("storage did not keep the file")
 // data) to make sure the storage really kept it. Only then does PutFile
 // report success.
 func PutFile(ctx context.Context, b *blob.Bucket, key string, r io.ReaderAt, size int64, opts PutOptions) (string, error) {
+	ctx, span := tracing.Tracer.Start(ctx, "storage.write", trace.WithAttributes(tracing.Size.Int64(size)))
+	sha, err := putFile(ctx, b, key, r, size, opts)
+	span.SetAttributes(tracing.SHA256.String(sha))
+	if errors.Is(err, ErrExists) {
+		tracing.Finish(span, "denied", err)
+	} else {
+		tracing.End(span, err)
+	}
+	return sha, err
+}
+
+func putFile(ctx context.Context, b *blob.Bucket, key string, r io.ReaderAt, size int64, opts PutOptions) (string, error) {
 	sha, md5sum, err := checksums(io.NewSectionReader(r, 0, size))
 	if err != nil {
 		return "", err

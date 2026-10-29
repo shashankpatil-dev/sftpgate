@@ -899,41 +899,59 @@ Cardinality is bounded: `account`, `folder`, `storage`, `step` and `job` all com
 
 ---
 
-## 8a. Traces [v0.2]
+## 8a. Traces
 
-- **As built:** export is OTLP/**HTTP** (`otlptracehttp`), not gRPC, because it's simpler and passes through firewalls and proxies more easily. SFTPgate's spans go to their own tracer provider (`tracing.Use`). The **global** OpenTelemetry provider stays a no-op on purpose: gocloud creates its own spans for every bucket call, and their error messages contain object keys. A test checks that no span attribute holds a file name or key. The local setup includes Jaeger, and `make e2e` checks that traces arrive.
+- **As built:** export is OTLP/**HTTP** (`otlptracehttp`), not gRPC, because it's simpler and passes through firewalls and proxies more easily. SFTPgate's spans go to their own tracer provider (`tracing.Use`). The **global** OpenTelemetry provider stays a no-op on purpose: gocloud creates its own spans for every bucket call, and their error messages contain object keys. Storage errors name the object key, so `tracing.Finish` keeps only their code (`storage error (NotFound)`). Tests check that no span attribute or error holds a file name or key. The local setup includes Jaeger, and `make e2e` checks that traces arrive.
 - **Enablement:** the standard OTel env vars only (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER`…). If the endpoint is unset, a no-op tracer is used, at zero cost. No YAML keys.
 - **Span tree:**
 
 ```mermaid
 flowchart TD
-  S["sftp.session"] --> U["sftp.upload"]
-  U --> SW["spool.write"]
+  S["sftp.session"] --> L["sftp.login"]
+  S --> U["sftp.upload"]
+  U --> B["action.check (before_upload)"]
   U --> STW["storage.write"]
-  S --> DL["sftp.download"] --> STR["storage.read"]
+  S --> DL["sftp.download"] --> STR["storage.read (per 1 MiB window)"]
   S --> O["sftp.rename / delete / mkdir / rmdir"]
+  TR["transfer.run - own trace"] --> TC["transfer.connect"]
+  TR --> TF["transfer.file"]
+  TF --> TB["action.* (before_push / before_pull)"]
+  TF --> TW["storage.write (pull)"]
   U -. "span link" .-> AR["action.run - new trace"]
-  AR --> AS["action.pgp_decrypt / pgp_encrypt / copy"]
+  TF -. "span link" .-> AR
+  AR --> SR["storage.read"]
+  AR --> AS["action.pgp_decrypt / pgp_encrypt / copy / check"]
   AR --> AW["action.webhook"]
   AW -->|traceparent header| RCV["receiver continues trace"]
 ```
 
+All attribute names are constants in `internal/tracing/attrs.go` (`sftpgate.*`):
+
 ```
-sftp.session                 account, ip, session_id, auth.method
-├── sftp.upload              folder, size, result
-│   ├── spool.write
-│   └── storage.write        storage
-├── sftp.download            folder, size, result
-│   └── storage.read         storage
-├── sftp.rename | delete | mkdir | rmdir
-action.run                   job_id, account, folder, attempt   (linked to the upload span)
-├── action.pgp_decrypt | pgp_encrypt | copy
-└── action.webhook           http.status   (injects `traceparent` header)
+sftp.session      client.address, account, session, auth_method, result
+├── sftp.login    account, auth_method, result          (denied = wrong credentials)
+├── sftp.upload   account, folder, storage, size, sha256, result
+│   ├── action.<step>                                   (before_upload)
+│   └── storage.write   size, sha256, result
+├── sftp.download account, folder, storage, size, sha256, result
+│   └── storage.read    storage, offset, size
+└── sftp.rename | delete | mkdir | rmdir   account, result
+transfer.run      transfer, direction, remote, moved, skipped, failed, result
+├── transfer.connect   remote
+└── transfer.file      transfer, storage, size, sha256, result
+    ├── action.<step>                                   (before_push / before_pull)
+    └── storage.write
+action.run        job, hook, account, folder, transfer, storage, size, attempt, result
+├── storage.read  storage                               (when a step needs the file)
+└── action.<step>                                       (webhook injects `traceparent`)
 ```
 
+- **Results:** `sftpgate.result` is the audit result: `ok`, `denied` (refused by a permission, a check, wrong credentials, or an existing file without overwrite) or `failed`; `transfer.file` can also be `skipped`. Only `failed` sets the span's error status, so error rates in span metrics mean real trouble. A denied span carries the reason in `sftpgate.reason`.
+- **Not traced:** connections that leave before saying anything (port checks, health probes), and connections refused by the cheap checks (limits, IP list, throttle); those are in metrics and the audit log. Spans for the session and login are started after the handshake, backdated to the connect, so probes cost nothing.
+
 - **Privacy:** spans carry account, folder, storage name, sizes and results. **Never** file names, object keys or file contents, because tracing backends are often less locked down than audit sinks. To find a specific file, join on `session_id`/`trace_id` with the audit log.
-- `action.run` starts a new trace with a span **link** to the upload span (the job may run minutes later or after a restart). The upload span context is stored in the job file as `traceparent`.
-- Code: one `tracing.Init(ctx) (shutdown func)` in `main`. Spans are opened in `server` (session) and `vfs`/`actions` (operations) with `otel.Tracer("sftpgate")`.
+- `action.run` starts a new trace with a span **link** to the upload span or `transfer.file` (the job may run minutes later or after a restart). That span context is stored in the job file as `traceparent`. `transfer.run` is a new root too, whether the schedule or the admin API started it.
+- Code: one `tracing.Init(ctx) (shutdown func)` in `main`. Spans are opened in `server` (session, login), `vfs` (operations, storage.read), `storage.PutFile` (storage.write), `transfers` and `actions`, with `tracing.Tracer`, and ended with `tracing.Finish(span, result, err)` or `tracing.End`.
 
 ---
 

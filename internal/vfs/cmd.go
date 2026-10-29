@@ -36,7 +36,7 @@ func (h *Handler) Filecmd(r *sftp.Request) error {
 
 	_, span := h.startSpan("sftp."+op, nil)
 	err := run(r)
-	tracing.End(span, err)
+	tracing.Finish(span, resultOf(err), err)
 	return err
 }
 

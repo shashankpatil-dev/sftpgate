@@ -216,15 +216,19 @@ grep -q 'SftpgateStorageErrors' <<<"$(curl -fs "$PROMETHEUS/api/v1/rules")" || f
 echo "checking the Grafana dashboard..."
 grep -q '"title":"SFTPgate"' <<<"$(curl -fs "$GRAFANA/api/dashboards/uid/sftpgate")" || fail "Grafana dashboard is missing"
 
-echo "checking that traces reach Jaeger..."
-traced=""
-for _ in $(seq 1 20); do
-  if grep -q '"operationName":"sftp.upload"' <<<"$(curl -fs "$JAEGER/api/traces?service=sftpgate&operation=sftp.upload&limit=1")"; then
-    traced=yes
-    break
-  fi
-  sleep 1
+echo "checking that traces reach Jaeger (sessions, logins, transfers, actions)..."
+for op in sftp.upload sftp.login storage.read transfer.run transfer.file action.run; do
+  traced=""
+  for _ in $(seq 1 20); do
+    if grep -q "\"operationName\":\"$op\"" <<<"$(curl -fs "$JAEGER/api/traces?service=sftpgate&operation=$op&limit=1")"; then
+      traced=yes
+      break
+    fi
+    sleep 1
+  done
+  [ -n "$traced" ] || fail "no $op span in Jaeger"
 done
-[ -n "$traced" ] || fail "no sftp.upload trace in Jaeger"
+grep -q '"key":"sftpgate.result"' <<<"$(curl -fs "$JAEGER/api/traces?service=sftpgate&operation=transfer.run&limit=1")" \
+  || fail "transfer.run spans must carry sftpgate.result"
 
 echo "all end-to-end checks passed"

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"gocloud.dev/blob"
 
@@ -140,6 +139,14 @@ func (d *download) window(at int64) (*window, error) {
 // fetch reads exactly length bytes at start. A request the storage cuts
 // short is tried again; data is only used when the whole window arrived.
 func (d *download) fetch(start, length int64) ([]byte, error) {
+	_, span := tracing.Tracer.Start(d.ctx, "storage.read", trace.WithAttributes(
+		tracing.Storage.String(d.t.folder.Storage), tracing.Offset.Int64(start), tracing.Size.Int64(length)))
+	buf, err := d.fetchTries(start, length)
+	tracing.End(span, err)
+	return buf, err
+}
+
+func (d *download) fetchTries(start, length int64) ([]byte, error) {
 	buf := make([]byte, length)
 	var err error
 	for try := 1; try <= fetchTries; try++ {
@@ -185,9 +192,12 @@ func (d *download) Close() error {
 	metrics.TransferDuration.WithLabelValues("out").Observe(time.Since(d.start).Seconds())
 
 	// Storage errors were already logged in ReadAt, so only record the result.
-	d.h.record(e, d.t, d.failed)
-	d.span.SetAttributes(attribute.Int64("sftpgate.size", d.sent))
-	tracing.End(d.span, d.failed)
+	result := d.h.record(e, d.t, d.failed)
+	d.span.SetAttributes(tracing.Size.Int64(d.sent))
+	if d.sha != "" {
+		d.span.SetAttributes(tracing.SHA256.String(d.sha))
+	}
+	tracing.Finish(d.span, result, d.failed)
 
 	// Only a download that reached the end counts: a client that stops
 	// halfway didn't get the file. Re-read pieces can push sent past size.

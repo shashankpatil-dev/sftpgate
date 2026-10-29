@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 
@@ -138,22 +137,21 @@ func (u *upload) Close() error {
 	size := u.size.Load()
 	e := u.event
 	e.Size = size
-	u.span.SetAttributes(attribute.Int64("sftpgate.size", size))
+	u.span.SetAttributes(tracing.Size.Int64(size))
 
 	// The client caused this (dropped connection, file too big), not the
 	// storage, so the error goes back as it is.
 	if u.failed != nil {
-		u.h.record(e, u.t, u.failed)
-		tracing.End(u.span, u.failed)
+		tracing.Finish(u.span, u.h.record(e, u.t, u.failed), u.failed)
 		return u.failed
 	}
 	if err := u.before(); err != nil {
-		tracing.End(u.span, err)
+		tracing.Finish(u.span, resultOf(err), err)
 		return u.h.finish(e, u.t, err)
 	}
 
-	_, write := tracing.Tracer.Start(u.ctx, "storage.write")
-	sha, err := storage.PutFile(context.Background(), u.t.bucket, u.t.key, u.file, size, storage.PutOptions{
+	// Not cancelled with the session: a finished upload is always saved.
+	sha, err := storage.PutFile(context.WithoutCancel(u.ctx), u.t.bucket, u.t.key, u.file, size, storage.PutOptions{
 		Metadata: map[string]string{
 			"sftpgate-account": u.h.Account.Name,
 			"sftpgate-ip":      u.h.IP,
@@ -164,8 +162,10 @@ func (u *upload) Close() error {
 		// can both pass it before either one is saved.
 		IfNotExist: !u.t.folder.Perm.Has(config.PermOverwrite),
 	})
-	tracing.End(write, err)
-	defer func() { tracing.End(u.span, err) }()
+	defer func() {
+		u.span.SetAttributes(tracing.SHA256.String(sha))
+		tracing.End(u.span, err)
+	}()
 	e.SHA256 = sha
 	e.DurationMS = time.Since(u.start).Milliseconds()
 	if err != nil {

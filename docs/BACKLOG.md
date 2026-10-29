@@ -5,17 +5,6 @@ Ideas and known gaps, not scheduled yet. Newest first.
 ## Features
 
 - **Scoped API tokens**, limited to some accounts or transfers.
-- **Complete, well-named traces usable for alerts and visibility.** Today only
-  `sftp.session`, `storage.write`, `action.run` and `action.<step>` exist. Add:
-  - `sftp.login` (method, result);
-  - one span per file: `sftp.upload` and `sftp.download` (account, folder,
-    file, size, sha256, result);
-  - `storage.read`;
-  - `transfer.run` and `transfer.file` (scheduled jobs have no trace today).
-
-  Use consistent attribute names and error status on failures, so trace-based
-  metrics (span metrics in Tempo, Jaeger or Datadog) can drive alerts, for
-  example "p95 of `sftp.upload` for razorpay".
 - **Webhooks for system events.** Actions and hooks (v0.4) made webhooks
   work for uploads, downloads, pushes and pulls. Still missing: events that
   aren't about one file, like `transfer_failed`, `action_gave_up` and

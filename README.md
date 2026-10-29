@@ -223,11 +223,21 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector:4318`)
 to send OpenTelemetry traces over OTLP/HTTP. All the other standard `OTEL_*`
 variables work too. Without it, tracing is off and costs nothing.
 
-Each session is one trace with a span per upload, download and file command.
-Action jobs get their own trace, linked to the upload or transfer, and webhooks
-carry a `traceparent` header so the receiver can continue the trace. Audit
-lines include `trace_id`. Spans never contain file names or object keys,
-because tracing tools are often less locked down than audit logs.
+Each connection is one trace: `sftp.session` with `sftp.login`, then a span
+per upload, download and file command, with `storage.read` and `storage.write`
+under them. Each transfer run is one trace: `transfer.run`, `transfer.connect`,
+and a `transfer.file` per file. Action jobs get their own trace (`action.run`),
+linked to the upload or transfer file, and webhooks carry a `traceparent`
+header so the receiver can continue the trace. Audit lines include `trace_id`.
+
+Every span uses the same attribute names (`sftpgate.account`, `.folder`,
+`.transfer`, `.size`, `.sha256`, `.result`...), and `sftpgate.result` is
+`ok`, `denied` or `failed`, as in the audit log. Only `failed` marks a span as
+an error, so span metrics (Tempo, Jaeger, Datadog) can alert on real trouble,
+for example "p95 of `sftp.upload` for razorpay" or "error rate of
+`transfer.run`", without counting refused files. Spans never contain file
+names or object keys, because tracing tools are often less locked down than
+audit logs; storage errors keep only their code.
 
 Mount the config **folder**, not the single file, in Docker and Kubernetes.
 Editors and git replace files instead of changing them, and a single-file mount

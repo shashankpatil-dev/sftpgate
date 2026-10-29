@@ -88,7 +88,7 @@ Every account, key, IP rule, folder and permission is declared in git and review
 - FR-23: Every security-relevant event (connect, auth success/failure, every file operation, config reload) emits one structured JSON audit record to stdout.
 - FR-24: Prometheus `/metrics` endpoint. `/healthz` and `/readyz` endpoints.
 - FR-25: The docker-compose bundle ships Prometheus and Grafana with a pre-built dashboard (v0.2).
-- FR-34: Optional OpenTelemetry traces (v0.2): one trace per session, with spans for each file operation, storage call and post-upload action, exported over OTLP to the org's tracing backend. Off unless configured.
+- FR-34: Optional OpenTelemetry traces (v0.2): one trace per connection (login, file operations, storage calls) and per transfer run (connect, each file), plus one per action job linked back to its file; the same attribute names and an ok/denied/failed result on every span; exported over OTLP to the org's tracing backend. Off unless configured.
 
 ### 6.7 Post-upload actions (v0.2)
 - FR-26: Per-folder ordered `on_upload` actions: `pgp_decrypt`, `pgp_encrypt`, `copy` (to another storage/prefix with templates like `{date}`), `webhook`.

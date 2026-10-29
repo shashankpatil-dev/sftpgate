@@ -20,6 +20,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
 	"github.com/shashankpatil-dev/sftpgate/internal/config"
@@ -115,7 +116,7 @@ func (r *Runner) Before(ctx context.Context, steps []*config.Step, path, filenam
 func (r *Runner) traced(ctx context.Context, step *config.Step, cur *current) error {
 	ctx, span := tracing.Tracer.Start(ctx, "action."+step.Name())
 	err := r.runStep(ctx, step, cur)
-	tracing.End(span, err)
+	tracing.Finish(span, actionResult(err), err)
 	result := audit.OK
 	if err != nil {
 		result = audit.Failed
@@ -143,7 +144,9 @@ func (r *Runner) runStep(ctx context.Context, step *config.Step, cur *current) e
 // download fetches the file into a temp file and checks that it is still
 // the exact file the job was made for. When that isn't known (a file pushed
 // to a partner, or one SFTPgate didn't store), its SHA-256 is worked out.
-func (r *Runner) download(ctx context.Context, cur *current) error {
+func (r *Runner) download(ctx context.Context, cur *current) (err error) {
+	ctx, span := tracing.Tracer.Start(ctx, "storage.read", trace.WithAttributes(tracing.Storage.String(cur.job.Storage)))
+	defer func() { tracing.End(span, err) }()
 	bucket := r.Buckets.Bucket(cur.cfg, cur.job.Storage)
 	rd, err := bucket.NewReader(ctx, cur.job.Key, nil)
 	if err != nil {

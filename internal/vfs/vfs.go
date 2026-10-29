@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
@@ -222,9 +221,9 @@ func (h *Handler) enqueue(ctx context.Context, hook string, t *target, size int6
 
 // startSpan starts a span for one file operation, as a child of the session.
 func (h *Handler) startSpan(name string, t *target) (context.Context, trace.Span) {
-	ctx, span := tracing.Tracer.Start(h.ctx(), name)
+	ctx, span := tracing.Tracer.Start(h.ctx(), name, trace.WithAttributes(tracing.Account.String(h.Account.Name)))
 	if t != nil && t.folder != nil {
-		span.SetAttributes(attribute.String("sftpgate.folder", t.folder.Path))
+		span.SetAttributes(tracing.Folder.String(t.folder.Path), tracing.Storage.String(t.folder.Storage))
 	}
 	return ctx, span
 }
@@ -236,22 +235,33 @@ func (h *Handler) finish(e audit.Event, t *target, err error) error {
 	return clientError(t, err)
 }
 
-// record writes the result of an operation to the audit log and the metrics.
-// Denied requests are audited too, because they can mean someone is probing.
-func (h *Handler) record(e audit.Event, t *target, err error) {
-	e.Result = audit.OK
-	var rej rejection
+// record writes the result of an operation to the audit log and the
+// metrics, and returns it. Denied requests are audited too, because they can
+// mean someone is probing.
+func (h *Handler) record(e audit.Event, t *target, err error) string {
+	e.Result = resultOf(err)
 	switch {
-	case errors.Is(err, sftp.ErrSSHFxPermissionDenied):
-		e.Result = audit.Denied
-	case errors.As(err, &rej):
-		e.Result, e.Error = audit.Denied, err.Error()
-	case err != nil:
-		e.Result = audit.Failed
+	case e.Result == audit.Denied && !errors.Is(err, sftp.ErrSSHFxPermissionDenied):
+		e.Error = err.Error()
+	case e.Result == audit.Failed:
 		e.Error = clientMessage(err)
 	}
 	audit.Emit(e)
 	h.count(e.Event, t, e.Result)
+	return e.Result
+}
+
+// resultOf is the audit result for an error: refused by a permission or a
+// check is "denied", anything else "failed".
+func resultOf(err error) string {
+	var rej rejection
+	switch {
+	case err == nil:
+		return audit.OK
+	case errors.Is(err, sftp.ErrSSHFxPermissionDenied), errors.As(err, &rej):
+		return audit.Denied
+	}
+	return audit.Failed
 }
 
 func (h *Handler) count(op string, t *target, result string) {

@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/audit"
@@ -310,15 +309,17 @@ func (r *Runner) process(ctx context.Context, job Job) {
 		trace.WithNewRoot(),
 		trace.WithLinks(trace.Link{SpanContext: tracing.Extract(job.TraceParent)}),
 		trace.WithAttributes(
-			attribute.String("sftpgate.job", job.ID),
-			attribute.String("sftpgate.hook", job.hook()),
-			attribute.String("sftpgate.account", job.Account),
-			attribute.String("sftpgate.folder", job.Folder),
-			attribute.String("sftpgate.transfer", job.Transfer),
-			attribute.Int("sftpgate.attempt", job.Attempt+1),
+			tracing.Job.String(job.ID),
+			tracing.Hook.String(job.hook()),
+			tracing.Account.String(job.Account),
+			tracing.Folder.String(job.Folder),
+			tracing.Transfer.String(job.Transfer),
+			tracing.Storage.String(job.Storage),
+			tracing.Size.Int64(job.Size),
+			tracing.Attempt.Int(job.Attempt+1),
 		))
 	err := r.runSteps(ctx, job)
-	tracing.End(span, err)
+	tracing.Finish(span, actionResult(err), err)
 
 	ev := audit.Event{
 		Event:    "action",
@@ -382,6 +383,18 @@ func backoff(base time.Duration, attempt int) time.Duration {
 		wait *= 2
 	}
 	return min(wait, maxBackoff)
+}
+
+// actionResult is "denied" when a check refused the file, as for uploads.
+func actionResult(err error) string {
+	var rejected *Rejected
+	switch {
+	case err == nil:
+		return audit.OK
+	case errors.As(err, &rejected):
+		return audit.Denied
+	}
+	return audit.Failed
 }
 
 // hook returns the job's hook, after_upload for jobs from before hooks existed.

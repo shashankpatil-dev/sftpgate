@@ -90,8 +90,10 @@ one admin call.
 - **Grafana dashboard** (19 panels): logins, connections, uploads and downloads
   per partner, data moved, transfer times, storage errors, denied requests,
   action jobs, scheduled transfers, and the config version.
-- **Tracing (optional):** each session and upload as a timeline in Jaeger,
-  Tempo or Datadog, continued into your webhook receivers.
+- **Tracing (optional):** each login, session, upload, download and transfer
+  run as a timeline in Jaeger, Tempo or Datadog, continued into your webhook
+  receivers. Every span says `ok`, `denied` or `failed`, so your tracing tool
+  can alert on slow or failing uploads per partner.
 
 ### Being told when something is wrong
 

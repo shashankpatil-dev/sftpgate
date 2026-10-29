@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	"go.opentelemetry.io/otel/trace"
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 	"golang.org/x/crypto/ssh"
@@ -22,6 +23,7 @@ import (
 	"github.com/shashankpatil-dev/sftpgate/internal/metrics"
 	"github.com/shashankpatil-dev/sftpgate/internal/sshalgo"
 	"github.com/shashankpatil-dev/sftpgate/internal/storage"
+	"github.com/shashankpatil-dev/sftpgate/internal/tracing"
 	"github.com/shashankpatil-dev/sftpgate/internal/vfs"
 )
 
@@ -71,18 +73,20 @@ func (r *run) pull() error {
 			r.count("skipped")
 			continue
 		} else if gcerrors.Code(err) != gcerrors.NotFound {
-			r.record(ev, err)
+			r.record(r.ctx, ev, err)
 			continue
 		}
 
-		ev.SHA256, err = r.pullFile(client, remotePath, bucket, key, e.Name(), e.Size())
+		ctx, span := r.fileSpan(pl.To.Storage, e.Size())
+		ev.SHA256, err = r.pullFile(ctx, client, remotePath, bucket, key, e.Name(), e.Size())
 		// Another run or pod stored it in the meantime: nothing to do.
 		if errors.Is(err, storage.ErrExists) {
 			r.count("skipped")
+			tracing.Finish(span, "skipped", nil)
 			continue
 		}
 		if err == nil {
-			r.enqueue(config.AfterPull, vfs.FileEvent{
+			r.enqueue(ctx, config.AfterPull, vfs.FileEvent{
 				Storage: pl.To.Storage, Key: key, Filename: e.Name(), Size: e.Size(), SHA256: ev.SHA256, RemotePath: remotePath,
 			})
 		}
@@ -91,14 +95,16 @@ func (r *run) pull() error {
 				err = fmt.Errorf("saved, but could not delete the remote file: %w", err)
 			}
 		}
-		r.record(ev, err)
+		span.SetAttributes(tracing.SHA256.String(ev.SHA256))
+		r.record(ctx, ev, err)
+		r.finishFile(span, err)
 	}
 	return r.summary()
 }
 
 // pullFile downloads one remote file to the work folder, checks its size,
 // runs the before_pull checks, and uploads it to the bucket.
-func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Bucket, key, name string, size int64) (string, error) {
+func (r *run) pullFile(ctx context.Context, client *sftp.Client, remotePath string, bucket *blob.Bucket, key, name string, size int64) (string, error) {
 	src, err := client.Open(remotePath)
 	if err != nil {
 		return "", err
@@ -124,7 +130,7 @@ func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Buck
 		return "", fmt.Errorf("remote file changed while reading (%d bytes, expected %d)", n, size)
 	}
 	if steps := r.t.Hooks.Steps(config.BeforePull); len(steps) > 0 {
-		_, _, cleanup, err := r.before(steps, tmp.Name(), name)
+		_, _, cleanup, err := r.before(ctx, steps, tmp.Name(), name)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -133,7 +139,7 @@ func (r *run) pullFile(client *sftp.Client, remotePath string, bucket *blob.Buck
 		}
 	}
 
-	return storage.PutFile(r.ctx, bucket, key, tmp, n, storage.PutOptions{
+	return storage.PutFile(ctx, bucket, key, tmp, n, storage.PutOptions{
 		Metadata: map[string]string{
 			"sftpgate-transfer": r.t.Name,
 			"sftpgate-remote":   r.t.Pull.From.Remote + ":" + remotePath,
@@ -178,17 +184,19 @@ func (r *run) push() error {
 			}
 		}
 
-		err = r.send(client, bucket, obj.Key, name, remotePath, steps)
+		ctx, span := r.fileSpan(ps.From.Storage, obj.Size)
+		err = r.send(ctx, client, bucket, obj.Key, name, remotePath, steps)
 		finalKey := obj.Key
 		if err == nil {
 			finalKey, err = r.afterPush(bucket, obj.Key, name)
 		}
 		if err == nil {
-			r.enqueue(config.AfterPush, vfs.FileEvent{
+			r.enqueue(ctx, config.AfterPush, vfs.FileEvent{
 				Storage: ps.From.Storage, Key: finalKey, Filename: name, Size: obj.Size, RemotePath: remotePath,
 			})
 		}
-		r.record(ev, err)
+		r.record(ctx, ev, err)
+		r.finishFile(span, err)
 	}
 	return r.summary()
 }
@@ -196,8 +204,8 @@ func (r *run) push() error {
 // send pushes one object to the remote. With before_push actions, a local
 // copy is checked (and maybe encrypted) first, and that is what gets sent.
 // A file that fails a check isn't sent, and stays where it is.
-func (r *run) send(client *sftp.Client, bucket *blob.Bucket, key, name, remotePath string, steps []*config.Step) error {
-	src, err := bucket.NewReader(r.ctx, key, nil)
+func (r *run) send(ctx context.Context, client *sftp.Client, bucket *blob.Bucket, key, name, remotePath string, steps []*config.Step) error {
+	src, err := bucket.NewReader(ctx, key, nil)
 	if err != nil {
 		return err
 	}
@@ -219,7 +227,7 @@ func (r *run) send(client *sftp.Client, bucket *blob.Bucket, key, name, remotePa
 		return err
 	}
 
-	outPath, _, cleanup, err := r.before(steps, tmp.Name(), name)
+	outPath, _, cleanup, err := r.before(ctx, steps, tmp.Name(), name)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -235,20 +243,38 @@ func (r *run) send(client *sftp.Client, bucket *blob.Bucket, key, name, remotePa
 }
 
 // before runs a before_* hook on a local copy of a file.
-func (r *run) before(steps []*config.Step, path, name string) (string, string, func(), error) {
+func (r *run) before(ctx context.Context, steps []*config.Step, path, name string) (string, string, func(), error) {
 	if r.s.Before == nil {
 		return "", "", nil, errors.New("before hooks can't run")
 	}
-	return r.s.Before(r.ctx, steps, path, name)
+	return r.s.Before(ctx, steps, path, name)
+}
+
+// fileSpan starts the transfer.file span of one file, inside the run's trace.
+func (r *run) fileSpan(storageName string, size int64) (context.Context, trace.Span) {
+	return tracing.Tracer.Start(r.ctx, "transfer.file", trace.WithAttributes(
+		tracing.Transfer.String(r.t.Name), tracing.Storage.String(storageName), tracing.Size.Int64(size)))
+}
+
+// finishFile ends a file's span. A file refused by a before hook is
+// "denied", like a refused upload.
+func (r *run) finishFile(span trace.Span, err error) {
+	var rejected *actions.Rejected
+	if errors.As(err, &rejected) {
+		tracing.Finish(span, audit.Denied, err)
+		return
+	}
+	tracing.End(span, err)
 }
 
 // enqueue queues a file's after_* actions, if the transfer has any. The
 // file has already moved, so a failure is logged, not counted against it.
-func (r *run) enqueue(hook string, ev vfs.FileEvent) {
+func (r *run) enqueue(ctx context.Context, hook string, ev vfs.FileEvent) {
 	if len(r.t.Hooks.Steps(hook)) == 0 || r.s.Enqueue == nil {
 		return
 	}
 	ev.Hook, ev.Transfer, ev.Time = hook, r.t.Name, r.s.Now()
+	ev.TraceParent = tracing.Inject(ctx)
 	if r.t.Pull != nil {
 		ev.Remote = r.t.Pull.From.Remote
 	} else {
@@ -317,8 +343,10 @@ func (r *run) afterPush(bucket *blob.Bucket, key, name string) (string, error) {
 // dial connects to a remote. Its host key must match the pinned one, and
 // only the algorithms SFTPgate allows are offered. Call the returned
 // function to close the connection.
-func (r *run) dial(remoteName string) (*sftp.Client, func(), error) {
+func (r *run) dial(remoteName string) (_ *sftp.Client, _ func(), err error) {
 	remote := r.cfg.Remotes[remoteName]
+	_, span := tracing.Tracer.Start(r.ctx, "transfer.connect", trace.WithAttributes(tracing.Remote.String(remoteName)))
+	defer func() { tracing.End(span, err) }()
 
 	var auth []ssh.AuthMethod
 	if remote.Signer != nil {
@@ -361,8 +389,9 @@ func (r *run) dial(remoteName string) (*sftp.Client, func(), error) {
 }
 
 // record writes the audit event and metric for one file.
-func (r *run) record(ev audit.Event, err error) {
+func (r *run) record(ctx context.Context, ev audit.Event, err error) {
 	ev.Result = audit.OK
+	ev.TraceID = tracing.TraceID(ctx)
 	if err != nil {
 		ev.Result, ev.Error = audit.Failed, err.Error()
 		r.failed++

@@ -15,7 +15,6 @@ import (
 	"os"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -79,13 +78,13 @@ func Extract(traceparent string) trace.SpanContext {
 	return trace.SpanContextFromContext(ctx)
 }
 
-// End finishes a span and marks it failed when err is not nil.
+// End finishes a span: "failed" if err is set, "ok" otherwise.
 func End(span trace.Span, err error) {
+	result := "ok"
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		result = "failed"
 	}
-	span.End()
+	Finish(span, result, err)
 }
 
 // TraceID returns the trace id of the span in ctx, or "" if it isn't traced.
