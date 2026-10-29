@@ -137,7 +137,7 @@ Secrets.
 replicas: 1                 # transfers run on one pod anyway; 1 is enough
 
 image:
-  tag: "0.3.0"              # pin the version; upgrade with a reviewed PR
+  tag: "0.4.0"              # pin the version; upgrade with a reviewed PR
 
 serviceAccount:
   annotations:              # step 2: the pod acts as this Google account
@@ -189,7 +189,7 @@ jobs:
       - name: Validate sftpgate.yaml
         run: |
           docker run --rm -v "$PWD/sftp:/cfg:ro" \
-            ghcr.io/shashankpatil-dev/sftpgate:0.3.0 \
+            ghcr.io/shashankpatil-dev/sftpgate:0.4.0 \
             validate -offline /cfg/sftpgate.yaml
 
   # After merge to main: send the new config to the cluster.
@@ -200,7 +200,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Get the SFTPgate chart (same version as the image)
-        run: git clone --depth 1 --branch v0.3.0 https://github.com/shashankpatil-dev/sftpgate /tmp/sftpgate
+        run: git clone --depth 1 --branch v0.4.0 https://github.com/shashankpatil-dev/sftpgate /tmp/sftpgate
       # Log in to your cluster here, the same way the Kotlin service's deploy does,
       # for example google-github-actions/auth + get-gke-credentials.
       - name: Deploy

@@ -26,7 +26,7 @@ Ideas and known gaps, not scheduled yet. Newest first.
 
 ## Project
 
-- CONTRIBUTING.md, CHANGELOG.md.
+- CONTRIBUTING.md.
 
 ## Not planned, and why
 

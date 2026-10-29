@@ -9,9 +9,9 @@ metadata:
   labels:
     app.kubernetes.io/name: sftpgate
     app.kubernetes.io/instance: sftpgate
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: sftpgate-0.1.0
+    helm.sh/chart: sftpgate-0.2.0
 # SFTPgate never talks to the Kubernetes API, so it gets no token.
 automountServiceAccountToken: false
 ---
@@ -23,9 +23,9 @@ metadata:
   labels:
     app.kubernetes.io/name: sftpgate
     app.kubernetes.io/instance: sftpgate
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: sftpgate-0.1.0
+    helm.sh/chart: sftpgate-0.2.0
 data:
   sftpgate.yaml: |
     version: 1
@@ -44,9 +44,9 @@ metadata:
   labels:
     app.kubernetes.io/name: sftpgate
     app.kubernetes.io/instance: sftpgate
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: sftpgate-0.1.0
+    helm.sh/chart: sftpgate-0.2.0
 spec:
   type: LoadBalancer
   externalTrafficPolicy: Local
@@ -68,9 +68,9 @@ metadata:
   labels:
     app.kubernetes.io/name: sftpgate
     app.kubernetes.io/instance: sftpgate
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: sftpgate-0.1.0
+    helm.sh/chart: sftpgate-0.2.0
 spec:
   type: ClusterIP
   selector:
@@ -91,9 +91,9 @@ metadata:
   labels:
     app.kubernetes.io/name: sftpgate
     app.kubernetes.io/instance: sftpgate
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: sftpgate-0.1.0
+    helm.sh/chart: sftpgate-0.2.0
 spec:
   clusterIP: None
   selector:
@@ -112,9 +112,9 @@ metadata:
   labels:
     app.kubernetes.io/name: sftpgate
     app.kubernetes.io/instance: sftpgate
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: sftpgate-0.1.0
+    helm.sh/chart: sftpgate-0.2.0
 spec:
   replicas: 1
   serviceName: sftpgate-pods
@@ -147,7 +147,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: sftpgate
-          image: "ghcr.io/shashankpatil-dev/sftpgate:0.3.0"
+          image: "ghcr.io/shashankpatil-dev/sftpgate:0.4.0"
           imagePullPolicy: IfNotPresent
           args: [serve]
           env:

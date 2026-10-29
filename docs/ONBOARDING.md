@@ -39,10 +39,10 @@ You need:
   Windows includes it.
 - **The `sftpgate` binary on your laptop,** for `validate` and `hash-password`.
   Build it with `make build`, or run it from the container image:
-  `docker run --rm ghcr.io/shashankpatil-dev/sftpgate:0.3.0 version`.
+  `docker run --rm ghcr.io/shashankpatil-dev/sftpgate:0.4.0 version`.
 
 > **About the image:** `ghcr.io/shashankpatil-dev/sftpgate:<version>` is
-> published when a version tag (like `v0.3.0`) is pushed. Until then, build it
+> published when a version tag (like `v0.4.0`) is pushed. Until then, build it
 > yourself from the repository and use that name instead:
 > `docker build -t sftpgate:local .`
 
@@ -149,7 +149,7 @@ docker run -d --name sftpgate --restart unless-stopped \
   -v sftpgate-data:/var/lib/sftpgate \
   -e SFTPGATE_CONFIG=/etc/sftpgate/config/sftpgate.yaml \
   --env-file /opt/sftpgate/secrets.env \
-  ghcr.io/shashankpatil-dev/sftpgate:0.3.0
+  ghcr.io/shashankpatil-dev/sftpgate:0.4.0
 ```
 
 What each part does:

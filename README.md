@@ -297,7 +297,7 @@ docker run -d --name sftpgate --read-only --tmpfs /tmp \
   -v "$PWD/ssh_host_ed25519_key:/etc/sftpgate/keys/ssh_host_ed25519_key:ro" \
   -v sftpgate-data:/var/lib/sftpgate \
   -e SFTPGATE_CONFIG=/etc/sftpgate/config/sftpgate.yaml \
-  ghcr.io/shashankpatil-dev/sftpgate:0.3.0
+  ghcr.io/shashankpatil-dev/sftpgate:0.4.0
 ```
 
 The image is distroless and runs as user 65532 with a read-only root
@@ -430,8 +430,10 @@ make k8s-smoke        # install the chart on a local kind cluster and test it
 ```
 
 Tests live under `test/`. Design docs are in [`docs/`](docs): [PRD](docs/PRD.md),
-[HLD](docs/HLD.md), [LLD](docs/LLD.md).
+[HLD](docs/HLD.md), [LLD](docs/LLD.md). What changed in each version, and how
+to upgrade: [CHANGELOG](CHANGELOG.md). Reporting a vulnerability:
+[SECURITY](SECURITY.md).
 
 ## License
 
-Apache-2.0
+Apache-2.0, see [LICENSE](LICENSE).
