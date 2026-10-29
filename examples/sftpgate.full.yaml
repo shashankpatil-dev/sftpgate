@@ -186,6 +186,12 @@ actions:
       # really came from Razorpay).
       signer_keys: ["${file:/etc/sftpgate/secrets/razorpay-signing.pub.asc}"]
 
+  # Any action can be switched off with "enabled: false" (it stays here and is
+  # still checked, but no hook runs it, not even jobs already queued):
+  #   notify-recon: { enabled: false, webhook: {...} }
+  # Not pgp_encrypt: that would send files unencrypted. Remove it from the
+  # hook instead.
+
   # pgp_encrypt: only the holder of the matching private key can open it.
   encrypt-for-auditor:
     pgp_encrypt:
@@ -373,8 +379,13 @@ transfers:
       #   delete           delete it from our bucket
       #   move:<prefix>    move it, e.g. to a "sent" folder, so it's never sent twice
       after: "move:payouts/sent/"
+      # Optional: where a file refused by a before_push check goes. Without
+      # it the file stays in the outbox and fails every run until fixed.
+      rejected: "move:payouts/rejected/"
+    # Optional: false pauses this transfer (not scheduled, run-now says 409).
+    # enabled: false
     hooks:
       # Check each file, then encrypt it for the bank: they receive
-      # <name>.pgp. A file that fails stays in the outbox.
+      # <name>.pgp. A file that fails moves to payouts/rejected/.
       before_push: [settlement-csv, encrypt-for-auditor]
       after_push: [notify-recon]

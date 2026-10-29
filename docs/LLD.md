@@ -1120,8 +1120,12 @@ func runPush(ctx, j Job) error {
     for obj in storage.List(prefix of j.Key template up to first var) matching pattern {
         stream blob -> remote tmp name ".<name>.part" -> c.PosixRename to final   // no partial files on their side
         after: keep (skip if remote exists) | delete | move:<prefix>
+        refused by before_push: stays, or rejected: move:<prefix> (audited "denied")
     }
 }
+// enabled: false on a transfer: not added to cron; Start/RunNow return ErrDisabled.
+// enabled: false on an action: dropped from Hooks.steps at load, so every hook,
+// queued job and OutName skips it. pgp_encrypt refuses enabled: false.
 ```
 
 A run that overlaps the previous one is skipped (`cron.SkipIfStillRunning`). Each run emits `job_run` audit + metrics.

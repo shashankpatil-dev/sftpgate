@@ -28,6 +28,16 @@ type Step struct {
 	PGPEncrypt *PGPEncrypt `yaml:"pgp_encrypt"`
 	Copy       *Copy       `yaml:"copy"`
 	Webhook    *Webhook    `yaml:"webhook"`
+
+	// Enabled false switches the action off everywhere it is used. It is
+	// left out of every hook, so it doesn't run, not even for jobs already
+	// queued. Unset means on.
+	Enabled *bool `yaml:"enabled"`
+}
+
+// On reports whether the action is switched on.
+func (s *Step) On() bool {
+	return s.Enabled == nil || *s.Enabled
 }
 
 // Name returns the step's kind as written in the YAML.
@@ -213,7 +223,9 @@ func (c *checker) hooks(p string, h *Hooks, allowed []string, cfg *Config) {
 					hook, name, name, step.Name(), strings.Join(slices.Sorted(maps.Keys(kinds)), ", "))
 				continue
 			}
-			h.steps[hook] = append(h.steps[hook], step)
+			if step.On() {
+				h.steps[hook] = append(h.steps[hook], step)
+			}
 		}
 	}
 }
@@ -230,8 +242,10 @@ func (c *checker) onUpload(p string, f *Folder, storages map[string]string) {
 	}
 	for i, s := range f.OnUpload {
 		c.step(fmt.Sprintf("%s.on_upload[%d]", p, i), s, storages)
+		if s.On() {
+			f.Hooks.steps[AfterUpload] = append(f.Hooks.steps[AfterUpload], s)
+		}
 	}
-	f.Hooks.steps[AfterUpload] = f.OnUpload
 }
 
 // step checks one action. p is where it is written in the file.
@@ -245,6 +259,12 @@ func (c *checker) step(p string, s *Step, storages map[string]string) {
 	if set != 1 {
 		c.fail(p, "each action needs exactly one of check, pgp_decrypt, pgp_encrypt, copy, webhook")
 		return
+	}
+
+	// Pausing encryption would quietly send files in the clear. Removing
+	// it from the hook is a change everyone can see in review.
+	if !s.On() && s.PGPEncrypt != nil {
+		c.fail(p+".enabled", "pgp_encrypt can't be switched off; remove it from the hooks instead")
 	}
 
 	sp := p + "." + s.Name()

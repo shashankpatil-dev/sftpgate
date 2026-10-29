@@ -58,7 +58,7 @@ func (s *site) apiRunTransfer(r *http.Request) (int, any, audit.Event) {
 	case errors.Is(err, transfers.ErrNoTransfer):
 		ev.Result, ev.Error = audit.Failed, err.Error()
 		return http.StatusNotFound, apiError{err.Error()}, ev
-	case errors.Is(err, transfers.ErrBusy):
+	case errors.Is(err, transfers.ErrBusy), errors.Is(err, transfers.ErrDisabled):
 		ev.Result, ev.Error = audit.Failed, err.Error()
 		return http.StatusConflict, apiError{err.Error()}, ev
 	case err != nil:

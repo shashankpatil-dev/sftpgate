@@ -113,6 +113,7 @@ type env struct {
 	raw    *blob.Bucket
 	out    *blob.Bucket
 	hook   *hookServer
+	src    string // the config last loaded
 	entity *openpgp.Entity
 	signer *openpgp.Entity
 	now    time.Time
@@ -162,6 +163,7 @@ func (e *env) load(src string) {
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	e.src = src
 	e.cfg.Store(cfg)
 }
 
@@ -359,6 +361,26 @@ func TestRetryFailedJobs(t *testing.T) {
 	}
 	if n, err := e.runner.Retry(""); err != nil || n != 0 {
 		t.Fatalf("Retry all with nothing failed = %d, %v", n, err)
+	}
+}
+
+// Switching an action off also stops it for jobs already in the queue: the
+// job finishes without calling it.
+func TestSwitchedOffActionSkipsQueuedJob(t *testing.T) {
+	e := newEnv(t)
+	e.upload("/hook", "a.csv", []byte("x"))
+	if len(e.queued("")) != 1 {
+		t.Fatal("test setup: the upload must queue a job")
+	}
+	e.load(strings.Replace(e.src, `- webhook: { url: "`, `- enabled: false
+            webhook: { url: "`, 1))
+
+	e.runner.RunDue(context.Background())
+	if len(e.hook.calls()) != 0 {
+		t.Fatal("a switched-off webhook must not be called")
+	}
+	if len(e.queued("")) != 0 || len(e.queued("failed")) != 0 {
+		t.Fatal("the job must finish, not wait or fail")
 	}
 }
 

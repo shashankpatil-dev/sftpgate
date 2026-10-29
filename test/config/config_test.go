@@ -276,6 +276,69 @@ func TestAdminValidation(t *testing.T) {
 	}
 }
 
+// enabled: false leaves an action out of every hook and pauses a transfer,
+// without deleting either from the config.
+func TestEnabled(t *testing.T) {
+	setHash(t)
+	key := hostKeyFile(t)
+	src := strings.Replace(base(key), "        max_file_size: 500MiB",
+		"        max_file_size: 500MiB\n        hooks: { before_upload: [recon-csv], after_upload: [archive, notify] }", 1) + `
+actions:
+  recon-csv: { enabled: false, check: { min_size: 1 } }
+  archive: { copy: { storage: raw, key: "archive/{filename}" } }
+  notify: { enabled: false, webhook: { url: "https://recon.example/hook" } }
+remotes:
+  bank:
+    addr: sftp.bank.example:22
+    user: acme
+    host_key: "` + testPubKey + `"
+    password: "${env:TEST_PW_HASH}"
+transfers:
+  - name: paused
+    enabled: false
+    schedule: "0 6 * * *"
+    pull:
+      from: { remote: bank, path: /out }
+      to: { storage: raw, key: "bank/{filename}" }
+  - name: running
+    schedule: "0 6 * * *"
+    pull:
+      from: { remote: bank, path: /out }
+      to: { storage: raw, key: "bank/{filename}" }
+`
+	cfg, err := config.Parse([]byte(src), config.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hooks *config.Hooks
+	for _, a := range cfg.Accounts {
+		for _, f := range a.Folders {
+			if len(f.Hooks.AfterUpload) > 0 {
+				hooks = &f.Hooks
+			}
+		}
+	}
+	if hooks == nil {
+		t.Fatal("test setup: no folder with hooks")
+	}
+	if n := len(hooks.Steps(config.BeforeUpload)); n != 0 {
+		t.Errorf("a switched-off check must not run, got %d steps", n)
+	}
+	if steps := hooks.Steps(config.AfterUpload); len(steps) != 1 || steps[0].Copy == nil {
+		t.Errorf("after_upload must keep only the copy, got %d steps", len(steps))
+	}
+	if cfg.Transfer("paused").On() || !cfg.Transfer("running").On() {
+		t.Error("enabled: false must pause only that transfer")
+	}
+
+	// A switched-off action is still checked, so it works when switched on.
+	bad := strings.Replace(src, `notify: { enabled: false, webhook: { url: "https://recon.example/hook" } }`,
+		`notify: { enabled: false, webhook: { url: "ftp://x" } }`, 1)
+	if _, err := config.Parse([]byte(bad), config.Options{}); err == nil {
+		t.Error("a switched-off action must still be validated")
+	}
+}
+
 func TestTransferValidation(t *testing.T) {
 	setHash(t)
 	key := hostKeyFile(t)
@@ -407,6 +470,7 @@ transfers:
       from: { storage: raw, prefix: outbox/ }
       to: { remote: bank, path: /in }
       after: "move:sent/"
+      rejected: "move:rejected/"
     hooks: { before_push: [recon-csv], after_push: [archive, notify] }
 `
 	folderHooks := "        max_file_size: 500MiB\n        hooks: { before_upload: [recon-csv], after_upload: [archive, notify], after_download: [notify] }"
@@ -433,6 +497,10 @@ transfers:
 		{"reserved header", "X-Team: recon", "X-Sftpgate-Job: x", "set by SFTPgate"},
 		{"bad action name", "  notify: {", "  Notify!: {", "name must match"},
 		{"unknown placeholder", "{transfer}", "{partner}", "unknown placeholder {partner}"},
+		{"encrypt switched off", "encrypt-ey: { pgp_encrypt:", "encrypt-ey: { enabled: false, pgp_encrypt:", "pgp_encrypt can't be switched off"},
+		{"rejected without checks", "hooks: { before_push: [recon-csv], after_push: [archive, notify] }", "hooks: { after_push: [archive, notify] }\n    enabled: true", "rejected: only files refused by before_push"},
+		{"rejected not a move", `rejected: "move:rejected/"`, `rejected: "delete"`, "rejected: must be move:<prefix>"},
+		{"rejected into sent", `rejected: "move:rejected/"`, `rejected: "move:sent/"`, "different from from.prefix and from the after: move prefix"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -444,6 +512,13 @@ transfers:
 				t.Fatalf("want %q, got %v", tc.want, err)
 			}
 		})
+	}
+
+	// A switched-off copy still counts, so switching it on later can't break.
+	bad := strings.Replace(src, `after: "move:sent/"`, `after: "delete"`, 1)
+	bad = strings.Replace(bad, "archive: { copy:", "archive: { enabled: false, copy:", 1)
+	if _, err := config.Parse([]byte(bad), config.Options{Offline: true}); err == nil || !strings.Contains(err.Error(), "only webhook actions can run") {
+		t.Fatalf("a switched-off copy after delete: got %v", err)
 	}
 }
 

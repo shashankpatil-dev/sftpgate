@@ -130,6 +130,7 @@ transfers:
       from: { storage: reports, prefix: payouts/outbox/, pattern: "*.csv" }
       to: { remote: bank, path: /in }
       after: "move:payouts/sent/"                 # keep | delete | move:<prefix>
+      rejected: "move:payouts/rejected/"          # optional, see below
 ```
 
 - **Pull** skips files already in the bucket. With `delete_after`, the remote
@@ -137,7 +138,13 @@ transfers:
   only removes partner files it stored itself in that run.
 - **Push** uploads under a temporary dot-name and renames it when complete, so
   the partner never sees half a file. With `after: keep` it skips files the
-  remote already has.
+  remote already has. With `rejected: "move:<prefix>"`, a file refused by a
+  `before_push` check moves there (audited as `denied`, with the reason), so it
+  fails one run instead of every run. Without it, the file stays in place.
+- **Pausing:** `enabled: false` on a transfer stops it being scheduled (and
+  run-now answers `409`). On an action, it leaves the action out of every hook,
+  including jobs already queued. `pgp_encrypt` can't be switched off, so files
+  are never quietly sent unencrypted; remove it from the hook instead.
 - A run is skipped if the previous one is still going. One bad file doesn't
   stop the others, but the run is marked failed.
 - With several replicas, set `SFTPGATE_TRANSFERS=off` on all but one.

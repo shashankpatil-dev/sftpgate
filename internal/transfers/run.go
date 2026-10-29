@@ -189,6 +189,8 @@ func (r *run) push() error {
 		finalKey := obj.Key
 		if err == nil {
 			finalKey, err = r.afterPush(bucket, obj.Key, name)
+		} else {
+			err = r.reject(bucket, obj.Key, name, err)
 		}
 		if err == nil {
 			r.enqueue(ctx, config.AfterPush, vfs.FileEvent{
@@ -325,19 +327,42 @@ func (r *run) pushFile(client *sftp.Client, src io.Reader, remotePath string) er
 // it again. It returns where the object is now.
 func (r *run) afterPush(bucket *blob.Bucket, key, name string) (string, error) {
 	ps := r.t.Push
-	moved := key
 	if prefix, ok := ps.MovePrefix(); ok {
-		moved = prefix + name
-		if err := bucket.Copy(r.ctx, moved, key, nil); err != nil {
+		if err := move(r.ctx, bucket, key, prefix+name); err != nil {
 			return key, fmt.Errorf("sent, but could not move it to %s: %w", prefix, err)
 		}
-	} else if ps.After != "delete" {
+		return prefix + name, nil
+	}
+	if ps.After != "delete" {
 		return key, nil
 	}
 	if err := bucket.Delete(r.ctx, key); err != nil {
 		return key, fmt.Errorf("sent, but could not remove it from the bucket: %w", err)
 	}
-	return moved, nil
+	return key, nil
+}
+
+// reject moves a file that a before_push check refused to the rejected
+// prefix, if one is set, so it fails one run instead of every run. The
+// check's error is kept either way; other errors are returned unchanged.
+func (r *run) reject(bucket *blob.Bucket, key, name string, err error) error {
+	var rejected *actions.Rejected
+	prefix, ok := r.t.Push.RejectedPrefix()
+	if !ok || !errors.As(err, &rejected) {
+		return err
+	}
+	if merr := move(r.ctx, bucket, key, prefix+name); merr != nil {
+		return fmt.Errorf("%w (and it could not be moved to %s: %w)", err, prefix, merr)
+	}
+	return fmt.Errorf("%w; moved to %s", err, prefix)
+}
+
+// move copies an object to a new key, then deletes the old one.
+func move(ctx context.Context, bucket *blob.Bucket, from, to string) error {
+	if err := bucket.Copy(ctx, to, from, nil); err != nil {
+		return err
+	}
+	return bucket.Delete(ctx, from)
 }
 
 // dial connects to a remote. Its host key must match the pinned one, and
@@ -392,8 +417,13 @@ func (r *run) dial(remoteName string) (_ *sftp.Client, _ func(), err error) {
 func (r *run) record(ctx context.Context, ev audit.Event, err error) {
 	ev.Result = audit.OK
 	ev.TraceID = tracing.TraceID(ctx)
+	var rejected *actions.Rejected
 	if err != nil {
+		// Refused by a check is "denied", as for uploads; it still fails the run.
 		ev.Result, ev.Error = audit.Failed, err.Error()
+		if errors.As(err, &rejected) {
+			ev.Result = audit.Denied
+		}
 		r.failed++
 	} else {
 		r.moved++

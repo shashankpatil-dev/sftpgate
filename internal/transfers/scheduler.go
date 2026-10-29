@@ -94,6 +94,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 func (s *Scheduler) build(ctx context.Context, cfg *config.Config) *cron.Cron {
 	c := cron.New(cron.WithLocation(cfg.Server.Location))
 	for _, t := range cfg.Transfers {
+		if !t.On() {
+			continue
+		}
 		name := t.Name
 		if _, err := c.AddFunc(t.Schedule, func() { _ = s.RunNow(ctx, name) }); err != nil {
 			// The config check already accepted the schedule, so this can't happen.
@@ -107,6 +110,7 @@ func (s *Scheduler) build(ctx context.Context, cfg *config.Config) *cron.Cron {
 var (
 	ErrBusy       = errors.New("transfer is still running from last time")
 	ErrNoTransfer = errors.New("no transfer with that name")
+	ErrDisabled   = errors.New("transfer is switched off (enabled: false)")
 )
 
 // RunNow runs one transfer right away and waits for it. A transfer never
@@ -122,10 +126,14 @@ func (s *Scheduler) RunNow(ctx context.Context, name string) error {
 }
 
 // Start runs one transfer in the background, for the admin API. It returns
-// at once: ErrNoTransfer or ErrBusy, or nil when the run has started.
+// at once: ErrNoTransfer, ErrDisabled or ErrBusy, or nil when the run has
+// started.
 func (s *Scheduler) Start(ctx context.Context, name string) error {
-	if find(s.Config(), name) == nil {
+	switch t := find(s.Config(), name); {
+	case t == nil:
 		return ErrNoTransfer
+	case !t.On():
+		return ErrDisabled
 	}
 	if !s.claim(name) {
 		return ErrBusy
@@ -142,6 +150,9 @@ func (s *Scheduler) run(ctx context.Context, name string) error {
 	t := find(cfg, name)
 	if t == nil {
 		return fmt.Errorf("%w: %q", ErrNoTransfer, name)
+	}
+	if !t.On() {
+		return ErrDisabled
 	}
 
 	direction, remote := "push", ""

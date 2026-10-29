@@ -41,6 +41,8 @@ func adminSite(t *testing.T, ops []string, started *[]string, retried *[]string)
 				return transfers.ErrBusy
 			case "missing":
 				return transfers.ErrNoTransfer
+			case "paused":
+				return transfers.ErrDisabled
 			}
 			*started = append(*started, name)
 			return nil
@@ -124,6 +126,7 @@ func TestRunTransferNow(t *testing.T) {
 		"bank-to-bucket": http.StatusAccepted,
 		"busy":           http.StatusConflict,
 		"missing":        http.StatusNotFound,
+		"paused":         http.StatusConflict,
 	} {
 		if resp, body := post(t, url+"/api/v1/transfers/"+name+"/run", bearer(adminToken)); resp.StatusCode != want {
 			t.Errorf("%s: status %d (%s), want %d", name, resp.StatusCode, body, want)

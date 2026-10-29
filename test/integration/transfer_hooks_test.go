@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 
 	"github.com/shashankpatil-dev/sftpgate/internal/actions"
+	"github.com/shashankpatil-dev/sftpgate/internal/transfers"
 )
 
 // hookedTransfers wires named actions into the push-and-move and pull-csv
@@ -47,7 +49,8 @@ type hookedEnv struct {
 	got    []actions.WebhookPayload
 }
 
-func newHookedEnv(t *testing.T) *hookedEnv {
+// newHookedEnv builds the env; edits change the config after the hooks are in.
+func newHookedEnv(t *testing.T, edits ...func(string) string) *hookedEnv {
 	t.Helper()
 	he := &hookedEnv{}
 	hook := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -73,7 +76,13 @@ func newHookedEnv(t *testing.T) *hookedEnv {
 		t.Fatal(err)
 	}
 
-	he.transferEnv = newTransferEnv(t, hookedTransfers(hook.URL, pubFile))
+	he.transferEnv = newTransferEnv(t, func(s string) string {
+		s = hookedTransfers(hook.URL, pubFile)(s)
+		for _, edit := range edits {
+			s = edit(s)
+		}
+		return s
+	})
 	// The runner shares the scheduler's buckets: in-memory buckets hold the
 	// files only inside one registry.
 	he.runner, err = actions.NewRunner(filepath.Join(t.TempDir(), "queue"), t.TempDir(), he.sched.Config, he.sched.Buckets)
@@ -163,5 +172,63 @@ func TestPullHooks(t *testing.T) {
 	}
 	if p := hooks[0]; p.Event != "pull" || p.Transfer != "pull-csv" || p.RemotePath != "/data/good.csv" || p.Key != "in/2026-10-25/good.csv" || p.SHA256 == "" {
 		t.Fatalf("webhook payload = %+v", p)
+	}
+}
+
+// With rejected: set, a file refused by before_push moves there once: that
+// run fails, the next one doesn't, and the good files are still sent.
+func TestPushRejectedMovesOnce(t *testing.T) {
+	e := newHookedEnv(t, func(s string) string {
+		return strings.Replace(s, `      after: "move:sent/"`, "      after: \"move:sent/\"\n      rejected: \"move:rejected/\"", 1)
+	})
+	put(t, e.mine, "outbox/good.csv", "id,amount\n1,10\n")
+	put(t, e.mine, "outbox/bad.csv", "name\nx\n")
+
+	err := e.sched.RunNow(context.Background(), "push-and-move")
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 files failed") {
+		t.Fatalf("first run: err = %v, want the rejected file to fail it", err)
+	}
+	if _, ok := read(e.mine, "outbox/bad.csv"); ok {
+		t.Fatal("the rejected file must leave the outbox")
+	}
+	if got, ok := read(e.mine, "rejected/bad.csv"); !ok || got != "name\nx\n" {
+		t.Fatalf("the rejected file must be in rejected/ unchanged, got %q, %v", got, ok)
+	}
+	if _, ok := read(e.partner, "key/good.csv.pgp"); !ok {
+		t.Fatal("the good file must still be sent")
+	}
+	for _, k := range []string{"key/bad.csv", "key/bad.csv.pgp"} {
+		if _, ok := read(e.partner, k); ok {
+			t.Fatalf("%s: a rejected file must never be sent", k)
+		}
+	}
+	if err := e.sched.RunNow(context.Background(), "push-and-move"); err != nil {
+		t.Fatalf("second run must pass once the bad file is out of the way: %v", err)
+	}
+	if hooks := e.webhooks(); len(hooks) != 1 || hooks[0].Filename != "good.csv" {
+		t.Fatalf("after_push must run for the sent file only, got %+v", hooks)
+	}
+}
+
+// A switched-off transfer isn't run from the API, and a switched-off action
+// is left out of its hook: here the check, so the bad file is sent too.
+func TestEnabledFalse(t *testing.T) {
+	e := newHookedEnv(t, func(s string) string {
+		s = strings.Replace(s, "  recon-csv: { check:", "  recon-csv: { enabled: false, check:", 1)
+		return strings.Replace(s, "  - name: pull-csv\n", "  - name: pull-csv\n    enabled: false\n", 1)
+	})
+	if err := e.sched.Start(context.Background(), "pull-csv"); !errors.Is(err, transfers.ErrDisabled) {
+		t.Fatalf("Start of a paused transfer: err = %v, want ErrDisabled", err)
+	}
+	if err := e.sched.RunNow(context.Background(), "pull-csv"); !errors.Is(err, transfers.ErrDisabled) {
+		t.Fatalf("RunNow of a paused transfer: err = %v, want ErrDisabled", err)
+	}
+
+	put(t, e.mine, "outbox/bad.csv", "name\nx\n")
+	if err := e.sched.RunNow(context.Background(), "push-and-move"); err != nil {
+		t.Fatalf("with its check switched off, the push must pass: %v", err)
+	}
+	if _, ok := read(e.partner, "key/bad.csv.pgp"); !ok {
+		t.Fatal("encryption still runs; only the switched-off check is skipped")
 	}
 }

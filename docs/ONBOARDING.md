@@ -634,10 +634,17 @@ accounts:
 | `before_upload` | folder | `check` only, while the partner waits | The upload is refused, nothing is stored. The reason goes to the partner's client and the audit log (`result: denied`). |
 | `after_upload` | folder | any action, in the background | Retried; after `max_attempts` the job moves to `queue/failed` |
 | `after_download` | folder | any action, once the partner has the whole file | Retried |
-| `before_push` | push transfer | `check`, `pgp_encrypt`. What's left is what gets sent. | The file isn't sent, stays in place, and the run fails (alert) |
+| `before_push` | push transfer | `check`, `pgp_encrypt`. What's left is what gets sent. | The file isn't sent and the run fails (alert). It stays in place, or moves to the `rejected` prefix if set |
 | `after_push` | push transfer | any action (only `webhook` with `after: delete`, since the file is gone) | Retried |
 | `before_pull` | pull transfer | `check` only | The file isn't stored, isn't deleted on their side, and the run fails |
 | `after_pull` | pull transfer | any action | Retried |
+
+**Switching an action off:** add `enabled: false` to it under `actions:`. It
+stays in the file (and is still validated), but every hook skips it, including
+jobs already in the queue, which then finish without it. Use it to pause a
+webhook whose receiver is being replaced, or a check while a partner fixes their
+export. `pgp_encrypt` can't be switched off: pausing it would send files in the
+clear, so remove it from the hook instead, where reviewers see it.
 
 "Before" hooks only check (or, for a push, encrypt), because something is
 waiting on them. A failed `check` in an `after_*` hook gives up at once: retrying
@@ -772,6 +779,7 @@ At least one of `private_key` or `password` is needed. Give the partner your
 | `name` | A unique name, lowercase with `-` |
 | `schedule` | Cron: `"0 6 * * *"` daily at 06:00, `"*/30 * * * *"` every 30 min, `"@every 10m"` |
 | `pull` **or** `push` | What to do, see below |
+| `enabled` | `false` pauses it: not scheduled, and the run-now API answers `409`. Default on. |
 
 **`pull`:** fetch from the partner into a bucket.
 
@@ -794,6 +802,7 @@ At least one of `private_key` or `password` is needed. Give the partner your
 | `to.remote` | Which remote |
 | `to.path` | Folder on their server, like `/in` |
 | `after` | `keep` (default; skips files they already have), `delete`, or `move:<prefix>` |
+| `rejected` | Optional `move:<prefix>`: a file refused by a `before_push` check moves here, so it fails one run, not every run. Must differ from `from.prefix` and the `after` prefix. Needs `before_push`. |
 
 ---
 

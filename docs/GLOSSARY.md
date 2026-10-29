@@ -644,6 +644,13 @@ Related docs: [ONBOARDING.md](ONBOARDING.md) (how to set it up) and
   - `delete`: remove it from the bucket.
   - `move:<prefix>`: move it to another prefix, like `sent/`.
 
+  A file refused by a `before_push` check stays in place, or moves to the
+  `rejected` prefix if one is set.
+
+**`enabled: false`**
+: Pauses a transfer (not scheduled, can't be run now) or switches an action off
+  in every hook, without deleting it from the config.
+
 **Temporary name (dot file)**
 : Pushes upload as `.name` first and rename to `name` when complete, so the
   partner never picks up half a file.

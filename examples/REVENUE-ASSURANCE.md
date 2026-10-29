@@ -310,6 +310,7 @@ transfers:
       from: { storage: ra-gst, prefix: gst/outbox/, pattern: "*" }
       to: { remote: ey, path: /incoming }
       after: "move:gst/sent/"
+      rejected: "move:gst/rejected/"   # a bad file moves here once, instead of failing every run
     hooks:
       before_push: [gst-csv, encrypt-ey]
       after_push: [notify-ra]

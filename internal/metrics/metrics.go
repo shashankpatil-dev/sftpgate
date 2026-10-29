@@ -87,7 +87,7 @@ var (
 
 	TransferFiles = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "sftpgate_transfer_files_total",
-		Help: "Files moved by scheduled transfers. skipped means the file was already there.",
+		Help: "Files moved by scheduled transfers. skipped means the file was already there; denied means a before hook refused it.",
 	}, []string{"transfer", "result"})
 
 	ConfigInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{

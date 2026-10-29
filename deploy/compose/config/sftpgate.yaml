@@ -111,13 +111,22 @@ transfers:
       before_pull: [not-empty]
       after_pull: [notify]
   # Every 5 seconds, CSVs in /s3/outbox are checked, encrypted and sent to
-  # /gcs/inbox, then moved to /s3/sent. A bad CSV stays in the outbox.
+  # /gcs/inbox, then moved to /s3/sent. A bad CSV moves to /s3/rejected.
   - name: demo-push
     schedule: "@every 5s"
     push:
       from: { storage: s3, prefix: demo/outbox/, pattern: "*.csv" }
       to: { remote: self, path: /gcs/inbox }
       after: "move:demo/sent/"
+      rejected: "move:demo/rejected/"
     hooks:
       before_push: [recon-csv, encrypt]
       after_push: [notify]
+  # Switched off with enabled: false: never scheduled, and the run-now API
+  # answers 409. Delete the line to switch it on.
+  - name: demo-paused
+    enabled: false
+    schedule: "@every 5s"
+    pull:
+      from: { remote: self, path: /s3, pattern: "*.paused" }
+      to: { storage: gcs, key: "demo/paused/{filename}" }

@@ -34,6 +34,15 @@ type Transfer struct {
 	Pull     *Pull  `yaml:"pull"`
 	Push     *Push  `yaml:"push"`
 	Hooks    Hooks  `yaml:"hooks"`
+
+	// Enabled false pauses the transfer: it isn't scheduled and can't be
+	// run from the API. Unset means on.
+	Enabled *bool `yaml:"enabled"`
+}
+
+// On reports whether the transfer is switched on.
+func (t *Transfer) On() bool {
+	return t.Enabled == nil || *t.Enabled
 }
 
 // Pull copies new files from a remote folder into a storage.
@@ -67,11 +76,20 @@ type Push struct {
 	// After says what happens to a file once it is sent: "keep" (and skip
 	// files the remote already has), "delete", or "move:<prefix>".
 	After string `yaml:"after"`
+
+	// Rejected says where a file refused by a before_push check goes:
+	// "move:<prefix>". Unset, it stays and fails every run until fixed.
+	Rejected string `yaml:"rejected"`
 }
 
 // MovePrefix returns the prefix of an "after: move:<prefix>" setting.
 func (p *Push) MovePrefix() (string, bool) {
 	return strings.CutPrefix(p.After, "move:")
+}
+
+// RejectedPrefix returns the prefix of a "rejected: move:<prefix>" setting.
+func (p *Push) RejectedPrefix() (string, bool) {
+	return strings.CutPrefix(p.Rejected, "move:")
 }
 
 // TransferKeyVars are the placeholders a pull key may use.
@@ -149,9 +167,13 @@ func (c *checker) transfers(cfg *Config) {
 		default:
 			c.push(p+".push", t.Push, cfg)
 			c.hooks(p, &t.Hooks, []string{BeforePush, AfterPush}, cfg)
+			if t.Push.Rejected != "" && len(t.Hooks.BeforePush) == 0 {
+				c.fail(p+".push.rejected", "only files refused by before_push checks are moved; add before_push checks or remove rejected")
+			}
 			// A deleted file can't be read again, so only webhooks can follow.
-			for i, s := range t.Hooks.Steps(AfterPush) {
-				if t.Push.After == "delete" && s.Webhook == nil {
+			// Disabled ones count too, so switching one on can't break this.
+			for i, name := range t.Hooks.AfterPush {
+				if s := cfg.Actions[name]; t.Push.After == "delete" && s != nil && s.Webhook == nil {
 					c.fail(fmt.Sprintf("%s.hooks.after_push[%d]", p, i), "with after: delete the file is gone once sent; only webhook actions can run")
 				}
 			}
@@ -194,6 +216,20 @@ func (c *checker) push(p string, ps *Push, cfg *Config) {
 		}
 	case ps.After != "keep" && ps.After != "delete":
 		c.fail(p+".after", "must be keep, delete or move:<prefix>")
+	}
+
+	if ps.Rejected == "" {
+		return
+	}
+	rejected, ok := ps.RejectedPrefix()
+	sent, _ := ps.MovePrefix()
+	switch {
+	case !ok || rejected == "":
+		c.fail(p+".rejected", "must be move:<prefix>")
+	case rejected == ps.From.Prefix || rejected == sent:
+		c.fail(p+".rejected", "needs a prefix different from from.prefix and from the after: move prefix")
+	default:
+		c.relativePrefix(p+".rejected", rejected)
 	}
 }
 

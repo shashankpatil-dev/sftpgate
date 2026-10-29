@@ -125,7 +125,7 @@ wait_get "/gcs/decrypted/$today/report-$run_id.csv" "$work/decrypted.csv" \
   || fail "the decrypted copy never appeared in /gcs/decrypted/$today"
 cmp -s "$work/good.csv" "$work/decrypted.csv" || fail "the decrypted copy differs from the original"
 
-echo "checking before_push (check + pgp_encrypt) and after: move..."
+echo "checking before_push (check + pgp_encrypt), after: move and rejected: move..."
 printf 'id\n' > "$work/push-bad.csv"
 printf -- '-mkdir /s3/outbox\nput %s /s3/outbox/push-%s.csv\nput %s /s3/outbox/push-bad-%s.csv\n' \
   "$work/good.csv" "$run_id" "$work/push-bad.csv" "$run_id" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null
@@ -135,10 +135,11 @@ gpg_do -o "$work/pushed.csv" --decrypt "$work/pushed.pgp"
 cmp -s "$work/good.csv" "$work/pushed.csv" || fail "the pushed file doesn't decrypt to the original"
 if exists "/gcs/inbox/push-$run_id.csv"; then fail "the plain file must never be sent"; fi
 exists "/s3/sent/push-$run_id.csv" || fail "a sent file must move to /s3/sent"
-exists "/s3/outbox/push-bad-$run_id.csv" || fail "a file that fails its check must stay in the outbox"
+exists "/s3/rejected/push-bad-$run_id.csv" || fail "a file that fails its check must move to /s3/rejected"
+if exists "/s3/outbox/push-bad-$run_id.csv"; then fail "a rejected file must leave the outbox"; fi
 if exists "/gcs/inbox/push-bad-$run_id.csv.pgp"; then fail "a file that fails its check must not be sent"; fi
-# Remove it, or every push run would fail on it again.
-echo "rm /s3/outbox/push-bad-$run_id.csv" | sftp "${ssh_opts[@]}" -b - "demo@$HOST" >/dev/null
+grep -q 'moved to demo/rejected/' <<<"$(curl -fs -H "Authorization: Bearer $API_TOKEN" "$HTTP/api/v1/events?event=transfer&result=denied")" \
+  || fail "the rejection must be audited as denied, with where the file went"
 
 echo "checking the webhooks of every hook (signed, with the custom header)..."
 check_hooks() {
@@ -198,6 +199,7 @@ echo "checking the admin calls..."
 [ "$(code -X POST "${api[@]}" "$HTTP/api/v1/transfers/demo-push/run")" = 401 ] || fail "a read-only token must not run a transfer"
 [ "$(code -X POST -u "e2e:$ADMIN_TOKEN" "$HTTP/api/v1/transfers/demo-push/run")" = 401 ] || fail "admin calls take only a Bearer token"
 [ "$(code -X POST "${admin[@]}" "$HTTP/api/v1/transfers/no-such/run")" = 404 ] || fail "an unknown transfer must answer 404"
+[ "$(code -X POST "${admin[@]}" "$HTTP/api/v1/transfers/demo-paused/run")" = 409 ] || fail "a transfer with enabled: false must answer 409"
 # demo-push runs every 5 seconds, so it may be busy right now: 202 or 409.
 status=$(code -X POST "${admin[@]}" "$HTTP/api/v1/transfers/demo-push/run")
 [ "$status" = 202 ] || [ "$status" = 409 ] || fail "run transfer now answered $status, want 202 or 409"
