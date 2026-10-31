@@ -1,0 +1,218 @@
+---
+import Header from './Header.astro';
+import { diff, links, pullCommand } from '../../data/landing.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<div class="hero">
+	<Header />
+	<div class="wrap">
+		<div class="pitch">
+			<h1>Add a partner with a pull request.</h1>
+			<p>
+				An SFTP server for banks, vendors and partners. Accounts and rules live in one YAML file in
+				git, and files land in your S3, GCS or Azure bucket.
+			</p>
+			<div class="actions">
+				<a class="button button-primary" href={base + links.quickstart}>Start the quickstart</a>
+				<div class="command">
+					<code>{pullCommand}</code>
+					<button type="button" data-copy={pullCommand}>Copy</button>
+				</div>
+			</div>
+		</div>
+
+		<figure class="review" aria-label="A pull request that adds a partner">
+			<figcaption>
+				<span class="file">sftpgate.yaml</span>
+				<span class="merged">Merged. Live within 30 seconds.</span>
+			</figcaption>
+			<pre><code>{
+				diff.map((line, i) => (
+					<span class:list={['line', line.kind]} style={`--i:${i}`}>{line.text}</span>
+				))
+			}</code></pre>
+		</figure>
+	</div>
+</div>
+
+<style>
+	.hero {
+		border-bottom: 1px solid var(--gate-line);
+		color: var(--hero-text);
+		padding-bottom: clamp(2.5rem, 6vw, 4.5rem);
+	}
+
+	.pitch {
+		padding-top: clamp(2.5rem, 7vw, 5rem);
+		text-align: center;
+	}
+
+	h1 {
+		max-width: 16ch;
+		margin: 0 auto 1.25rem;
+		font-size: clamp(2.6rem, 6.5vw, 4.75rem);
+		font-weight: 800;
+		line-height: 1.02;
+		letter-spacing: -0.03em;
+	}
+
+	.pitch p {
+		max-width: 56ch;
+		margin: 0 auto 2rem;
+		color: var(--hero-muted);
+		font-size: 1.2rem;
+	}
+
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		align-items: stretch;
+		justify-content: center;
+	}
+
+	.command {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-width: 0;
+		padding: 0 0.5rem 0 0.9rem;
+		border: 1px solid var(--panel-line);
+		border-radius: 6px;
+		background: var(--panel-bg);
+	}
+
+	.command code {
+		min-width: 0;
+		overflow-x: auto;
+		color: var(--panel-text);
+		font-size: 0.82rem;
+		white-space: nowrap;
+	}
+
+	.command button {
+		flex: none;
+		padding: 0.25rem 0.6rem;
+		border: 1px solid var(--panel-line);
+		border-radius: 4px;
+		background: none;
+		color: var(--gate-accent);
+		cursor: pointer;
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 600;
+	}
+
+	.command button:hover {
+		border-color: var(--gate-accent);
+	}
+
+	.review {
+		max-width: 52rem;
+		margin: clamp(2.5rem, 6vw, 4rem) auto 0;
+		border: 1px solid var(--panel-line);
+		border-top: 3px solid var(--gate-accent);
+		border-radius: 6px;
+		background: var(--panel-bg);
+		box-shadow: 0 24px 60px rgb(0 0 0 / 35%);
+	}
+
+	figcaption {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		align-items: baseline;
+		justify-content: space-between;
+		padding: 0.65rem 1rem;
+		border-bottom: 1px solid var(--panel-line);
+	}
+
+	.file {
+		color: var(--panel-text);
+		font-family: var(--sl-font-mono);
+		font-size: 0.85rem;
+	}
+
+	.merged {
+		color: var(--gate-accent);
+		font-size: 0.9rem;
+		font-weight: 600;
+		animation: reveal 0.3s ease-out 1.25s both;
+	}
+
+	pre {
+		margin: 0;
+		padding: 0.75rem 0;
+		overflow-x: auto;
+		color: var(--panel-text);
+		font-size: 0.88rem;
+		line-height: 1.65;
+	}
+
+	.line {
+		display: block;
+		width: max-content;
+		min-width: 100%;
+		padding-inline: 1rem;
+		white-space: pre;
+	}
+
+	.line::before {
+		display: inline-block;
+		width: 1.4em;
+		content: ' ';
+	}
+
+	.line.add {
+		background: rgb(125 211 192 / 10%);
+		color: var(--sl-color-accent-high);
+		animation: reveal 0.2s ease-out both;
+		animation-delay: calc(0.35s + var(--i) * 0.07s);
+	}
+
+	.line.add::before {
+		color: var(--gate-accent);
+		content: '+';
+	}
+
+	@keyframes reveal {
+		from {
+			opacity: 0;
+			transform: translateX(-6px);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.line.add,
+		.merged {
+			animation: none;
+		}
+	}
+
+	@media (max-width: 34rem) {
+		.button-primary,
+		.command {
+			width: 100%;
+		}
+
+		.button-primary {
+			text-align: center;
+		}
+
+		.command {
+			padding-block: 0.5rem;
+		}
+	}
+</style>
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
+		button.addEventListener('click', async () => {
+			await navigator.clipboard.writeText(button.dataset.copy ?? '');
+			button.textContent = 'Copied';
+			setTimeout(() => (button.textContent = 'Copy'), 1500);
+		});
+	}
+</script>

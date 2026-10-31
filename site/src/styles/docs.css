@@ -1,0 +1,69 @@
+/* Adjustments to the docs theme. Keep this small: tokens.css does most of it. */
+
+.sl-markdown-content {
+	line-height: 1.68;
+}
+
+.sl-markdown-content h2 {
+	font-size: 1.6rem;
+	letter-spacing: -0.015em;
+}
+
+.sl-markdown-content h3 {
+	font-size: 1.15rem;
+}
+
+/* Setting names in the reference: code, but read as headings. */
+.sl-markdown-content :is(h2, h3) code {
+	padding: 0.1em 0.4em;
+	border-radius: 4px;
+	background: var(--sl-color-accent-low);
+	color: var(--sl-color-accent-high);
+	font-size: 0.92em;
+	font-weight: 500;
+}
+
+.sl-markdown-content h3 code {
+	font-size: 0.95rem;
+}
+
+.sidebar-content a[aria-current='page'] {
+	background: var(--sl-color-accent-low);
+	color: var(--sl-color-accent-high);
+	font-weight: 600;
+}
+
+.site-title {
+	color: var(--sl-color-white);
+	font-size: 1.15rem;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+.site-title img {
+	height: 1.6rem;
+}
+
+/* Previous and next links at the end of a page. */
+.pagination-links .link-title {
+	font-size: 1.05rem;
+}
+
+.pagination-links a {
+	box-shadow: none;
+	font-size: 0.85rem;
+}
+
+/* The divider after the GitHub icon led to the theme menu, which is gone. */
+.social-icons::after {
+	display: none;
+}
+
+/* The same size as the GitHub logo on the landing page. */
+.social-icons a {
+	color: var(--sl-color-white);
+}
+
+.social-icons svg {
+	font-size: 22px;
+}

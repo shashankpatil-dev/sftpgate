@@ -11,7 +11,7 @@ ALL_OPTIONS := --set gitSync.enabled=true --set gitSync.repo=https://example.com
 
 PROMETHEUS_IMAGE := prom/prometheus:v3.6.0
 
-.PHONY: build test lint validate check-monitoring dev-keys up up-gitops down logs e2e manifests check-k8s k8s-smoke
+.PHONY: build test lint validate check-docs site check-monitoring dev-keys up up-gitops down logs e2e manifests check-k8s k8s-smoke
 
 ## build: compile the sftpgate binary into ./bin
 build:
@@ -30,6 +30,14 @@ validate: build
 	bin/sftpgate validate -offline examples/sftpgate.yaml
 	bin/sftpgate validate -offline examples/sftpgate.full.yaml
 	bin/sftpgate validate -offline deploy/compose/config/sftpgate.yaml
+
+## check-docs: check every complete config example in the docs site
+check-docs: build
+	cd site && node scripts/validate-examples.mjs
+
+## site: run the docs site locally at http://localhost:4321/sftpgate/
+site:
+	cd site && npm install && npm run dev
 
 ## check-monitoring: check the Prometheus config and run the alert rule tests
 check-monitoring:

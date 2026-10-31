@@ -1,0 +1,80 @@
+---
+import { Code } from '@astrojs/starlight/components';
+import { showcase } from '../../data/landing.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<section class="section">
+	<div class="wrap">
+		<h2>Everything is a few lines of config</h2>
+		<div class="rows">
+			{
+				showcase.map((item) => (
+					<article>
+						<div class="copy">
+							<h3>{item.title}</h3>
+							<p>{item.text}</p>
+							<a href={base + item.link.href}>{item.link.label}</a>
+						</div>
+						<div class="example">
+							<Code code={item.code} lang={item.lang} />
+						</div>
+					</article>
+				))
+			}
+		</div>
+	</div>
+</section>
+
+<style>
+	.rows {
+		display: grid;
+		gap: clamp(3rem, 6vw, 4.5rem);
+		margin-top: 2.5rem;
+	}
+
+	article {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: clamp(2rem, 6vw, 5rem);
+		align-items: center;
+	}
+
+	article:nth-child(even) .copy {
+		order: 1;
+	}
+
+	h3 {
+		margin: 0 0 0.5rem;
+		font-size: 1.35rem;
+		line-height: 1.2;
+		letter-spacing: -0.01em;
+	}
+
+	p {
+		max-width: 44ch;
+		margin: 0 0 0.75rem;
+		color: var(--gate-muted);
+	}
+
+	a {
+		color: var(--gate-link);
+		font-weight: 600;
+	}
+
+	.example {
+		min-width: 0;
+	}
+
+	@media (max-width: 56rem) {
+		article {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 1.25rem;
+		}
+
+		article:nth-child(even) .copy {
+			order: 0;
+		}
+	}
+</style>

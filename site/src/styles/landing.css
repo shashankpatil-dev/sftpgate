@@ -1,0 +1,80 @@
+/* Shared by every section of the landing page. Section styles live with
+   their component. */
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--gate-page);
+	color: var(--gate-text);
+	font-family: var(--sl-font);
+	font-size: 1.0625rem;
+	line-height: 1.6;
+}
+
+a {
+	color: inherit;
+}
+
+:focus-visible {
+	outline: 2px solid var(--gate-accent);
+	outline-offset: 2px;
+}
+
+code,
+pre {
+	font-family: var(--sl-font-mono);
+}
+
+.wrap {
+	width: min(72rem, 100% - 2rem);
+	margin-inline: auto;
+}
+
+.section {
+	padding-block: clamp(3.5rem, 8vw, 6rem);
+}
+
+.section + .section {
+	border-top: 1px solid var(--gate-line);
+}
+
+.section h2 {
+	max-width: 30ch;
+	margin: 0 0 1rem;
+	font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+	line-height: 1.12;
+	letter-spacing: -0.02em;
+}
+
+.section .lead {
+	max-width: 60ch;
+	margin: 0 0 2.5rem;
+	color: var(--gate-muted);
+}
+
+.button {
+	display: inline-block;
+	padding: 0.7rem 1.15rem;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.button-primary {
+	background: var(--gate-accent);
+	color: var(--gate-on-accent);
+}
+
+.button-primary:hover {
+	background: var(--gate-accent-hover);
+}

@@ -1,0 +1,110 @@
+---
+import { journey } from '../../data/landing.mjs';
+---
+
+<section class="section">
+	<div class="wrap">
+		<h2>What happens to every file</h2>
+		<p class="lead">
+			Partners use WinSCP, FileZilla, the sftp command or their own scripts, with nothing new to
+			install. Each connection passes the same gates, in this order.
+		</p>
+		<ol>
+			{
+				journey.map((step) => (
+					<li>
+						<h3>{step.title}</h3>
+						<p>{step.text}</p>
+					</li>
+				))
+			}
+		</ol>
+	</div>
+</section>
+
+<style>
+	ol {
+		display: grid;
+		grid-template-columns: repeat(6, minmax(0, 1fr));
+		gap: 1.5rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		counter-reset: step;
+	}
+
+	li {
+		position: relative;
+		padding-top: 2.75rem;
+		counter-increment: step;
+	}
+
+	/* The bar every step sits on. */
+	li::after {
+		position: absolute;
+		top: 0.85rem;
+		right: -1.5rem;
+		left: 0;
+		height: 3px;
+		background: var(--gate-line);
+		content: '';
+	}
+
+	li:last-child::after {
+		right: 0;
+	}
+
+	li::before {
+		position: absolute;
+		z-index: 1;
+		top: 0;
+		left: 0;
+		width: 1.8rem;
+		height: 1.8rem;
+		border-radius: 50%;
+		background: var(--gate-accent);
+		color: var(--gate-on-accent);
+		content: counter(step);
+		font-size: 0.9rem;
+		font-weight: 700;
+		line-height: 1.8rem;
+		text-align: center;
+	}
+
+	h3 {
+		margin: 0 0 0.35rem;
+		font-size: 1.05rem;
+		line-height: 1.25;
+	}
+
+	p {
+		margin: 0;
+		color: var(--gate-muted);
+		font-size: 0.95rem;
+		line-height: 1.5;
+	}
+
+	@media (max-width: 62rem) {
+		ol {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 0;
+		}
+
+		li {
+			padding: 0 0 1.5rem 2.75rem;
+		}
+
+		li::after {
+			top: 0;
+			right: auto;
+			bottom: 0;
+			left: 0.8rem;
+			width: 3px;
+			height: auto;
+		}
+
+		li:last-child::after {
+			display: none;
+		}
+	}
+</style>

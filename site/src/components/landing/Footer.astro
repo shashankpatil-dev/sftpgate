@@ -1,0 +1,44 @@
+---
+import { links } from '../../data/landing.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<footer>
+	<div class="wrap">
+		<p>SFTPgate is open source under the Apache-2.0 license.</p>
+		<nav aria-label="Footer">
+			<a href={base + links.docs}>Docs</a>
+			<a href={base + 'project/changelog/'}>Changelog</a>
+			<a href={base + 'project/security/'}>Security</a>
+			<a href={links.github}>GitHub</a>
+		</nav>
+	</div>
+</footer>
+
+<style>
+	footer {
+		padding-block: 2rem;
+		border-top: 1px solid var(--gate-line);
+		color: var(--gate-muted);
+		font-size: 0.95rem;
+	}
+
+	.wrap {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem 2rem;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	p {
+		margin: 0;
+	}
+
+	nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1.25rem;
+	}
+</style>

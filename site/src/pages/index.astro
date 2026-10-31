@@ -1,0 +1,25 @@
+---
+import Features from '../components/landing/Features.astro';
+import FileJourney from '../components/landing/FileJourney.astro';
+import Footer from '../components/landing/Footer.astro';
+import Hero from '../components/landing/Hero.astro';
+import Highlights from '../components/landing/Highlights.astro';
+import QuickStart from '../components/landing/QuickStart.astro';
+import Showcase from '../components/landing/Showcase.astro';
+import Landing from '../layouts/Landing.astro';
+---
+
+<Landing
+	title="SFTPgate: partner file exchange, configured in git"
+	description="An SFTP gateway to S3, GCS and Azure. Accounts and rules live in one YAML file in git."
+>
+	<Hero />
+	<main>
+		<Highlights />
+		<FileJourney />
+		<Showcase />
+		<Features />
+		<QuickStart />
+	</main>
+	<Footer />
+</Landing>

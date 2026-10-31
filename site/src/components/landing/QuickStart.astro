@@ -1,0 +1,44 @@
+---
+import { Code } from '@astrojs/starlight/components';
+import { links } from '../../data/landing.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const run = `docker run -d --name sftpgate \\
+  --user "$(id -u):$(id -g)" \\
+  -p 2222:2222 -p 8080:8080 \\
+  -v "$PWD/config:/config:ro" \\
+  -v "$PWD/keys:/keys:ro" \\
+  -v "$PWD/data:/data" \\
+  -e SFTPGATE_CONFIG=/config/sftpgate.yaml \\
+  ghcr.io/shashankpatil-dev/sftpgate:0.4.0`;
+---
+
+<section class="section">
+	<div class="wrap columns">
+		<div>
+			<h2>Send your first file in five minutes</h2>
+			<p class="lead">
+				The quickstart uses your laptop's disk as the bucket, so you only need Docker and the sftp
+				command.
+			</p>
+			<a class="button button-primary" href={base + links.quickstart}>Start the quickstart</a>
+		</div>
+		<Code code={run} lang="sh" title="Run it" />
+	</div>
+</section>
+
+<style>
+	.columns {
+		display: grid;
+		grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+		gap: clamp(2rem, 6vw, 5rem);
+		align-items: center;
+	}
+
+	@media (max-width: 56rem) {
+		.columns {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+</style>

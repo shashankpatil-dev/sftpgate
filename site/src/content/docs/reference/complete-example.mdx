@@ -1,0 +1,12 @@
+---
+title: Complete example
+description: Every setting in one commented file.
+tableOfContents: false
+---
+
+import { Code } from '@astrojs/starlight/components';
+import full from '../../../../../examples/sftpgate.full.yaml?raw';
+
+This file uses every feature, with a comment on each line. Copy it, delete what you don't need, and change the names. It's checked by `sftpgate validate` on every change to the repository.
+
+<Code code={full} lang="yaml" title="sftpgate.yaml" />

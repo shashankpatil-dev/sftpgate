@@ -1,0 +1,67 @@
+---
+import { builtIn, links, plugIn } from '../../data/landing.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<section class="section">
+	<div class="wrap">
+		<h2>Safe by default, more when you add it</h2>
+		<p class="lead">
+			A short config gives you a locked-down gateway. Every extra is a few lines of YAML, and does
+			nothing until you add it.
+		</p>
+		<div class="columns">
+			<div>
+				<h3>Always there</h3>
+				<ul>{builtIn.map((item) => <li>{item}</li>)}</ul>
+			</div>
+			<div>
+				<h3>Add when you need it</h3>
+				<ul>{plugIn.map((item) => <li>{item}</li>)}</ul>
+			</div>
+		</div>
+		<p class="more"><a href={base + links.builtIn}>See every feature and its default</a></p>
+	</div>
+</section>
+
+<style>
+	.columns {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: clamp(2rem, 6vw, 5rem);
+	}
+
+	h3 {
+		margin: 0 0 0.75rem;
+		padding-bottom: 0.6rem;
+		border-bottom: 3px solid var(--gate-accent);
+		font-size: 1.15rem;
+	}
+
+	ul {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	li {
+		padding: 0.6rem 0;
+		border-bottom: 1px solid var(--gate-line);
+	}
+
+	.more {
+		margin: 2rem 0 0;
+	}
+
+	.more a {
+		color: var(--gate-link);
+		font-weight: 600;
+	}
+
+	@media (max-width: 44rem) {
+		.columns {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+</style>
