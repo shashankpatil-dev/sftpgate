@@ -7,8 +7,6 @@ Ideas and known gaps, not scheduled yet. Newest first.
 - **Scoped API tokens**, limited to some accounts or transfers.
 - **More checks.** Duplicate content (a SHA-256 already received under another
   name, which needs a store of seen hashes), Excel sheets, and JSON schema.
-- **Expected-file alerts.** "Razorpay's file must arrive by 11:00": a metric or
-  alert when an expected upload or transfer file is missing.
 - **Streaming uploads** for sequential writers, skipping the spool disk.
 - **Publish the Helm chart** as an OCI artifact on release, so teams don't need
   to clone the repository to install it.
@@ -40,3 +38,8 @@ Ideas and known gaps, not scheduled yet. Newest first.
   weaker copy, and spike detection would count per pod. Webhooks stay for
   file events (upload, download, push, pull), which only SFTPgate knows
   about. See "Sending alerts to Slack" in the README.
+- **Expected-file alerts** ("Razorpay's file must arrive by 11:00"). Decided
+  against on 2026-10-31. The rule belongs to the business, not the gateway, and
+  each team's calendar differs. Teams can run this outside SFTPgate with their
+  bucket's monitoring or a scheduled job that checks the bucket. A pull that
+  fails already raises `SftpgateTransferFailing`.

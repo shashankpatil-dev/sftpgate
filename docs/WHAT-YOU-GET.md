@@ -177,3 +177,78 @@ These keep it small, safe and focused:
   bucket or from the webhook.
 - **One view for all accounts in the API.** It's built for the operations team,
   not for each partner.
+
+## 8. What's built in, and what you plug in
+
+With a minimal config (a host key, a storage, and an account with a folder),
+SFTPgate only moves files safely. Everything else is added by you, and costs
+nothing until you add it.
+
+### You must provide
+
+| What | Setting |
+|---|---|
+| Server identity | `server.host_keys` |
+| At least one bucket | `storages` |
+| Partners and their folders | `accounts`, each with `folders` and `perms` |
+
+### Always on, can't be switched off
+
+| What | Notes |
+|---|---|
+| Complete files only | A file reaches the bucket only when it's finished |
+| Integrity check | SHA-256 stored, size and checksum read back after every save |
+| Folder jail and permissions | A partner has only the `perms` you list |
+| No overwrites | Unless `overwrite` is in `perms` |
+| SFTP only | No shell, commands or tunnels |
+| Modern encryption | No SHA-1 |
+| Audit log | One JSON line per event, on the container's output |
+| Secret check | `validate` refuses plain secrets in the config |
+| Safe reload | A broken config is refused; the old one keeps running |
+| Graceful shutdown | Uploads in progress are waited for |
+| `/healthz`, `/readyz`, `/metrics` | No token needed, so keep this port inside your network |
+
+### On with a default, you can change the value
+
+Leaving one out, or setting it to 0, gives the default. You can't turn these off.
+
+| What | Setting | Default |
+|---|---|---|
+| Connection limit | `server.max_connections` | 25 |
+| Login tries per connection | `server.max_auth_tries` | 6 |
+| Blocking IPs that keep failing | `server.throttle` | 5 failures in 10m blocks for 15m |
+| Idle disconnect | `server.idle_timeout` | 15m |
+| Free disk kept | `server.min_spool_free` | 1GiB |
+| Action queue | `server.queue` | 4 workers, 8 tries, 30s backoff |
+| Config check interval | `server.reload_interval` | 10s |
+| Time zone | `server.timezone` | UTC |
+| Login mode | `auth.mode` | `any`: a key or a password |
+| After a push | `push.after` | `keep` |
+| After a pull | `pull.delete_after` | `false` |
+
+### Plug in: off until you add it
+
+| What | How to add it | Without it |
+|---|---|---|
+| Webhook | `webhook` action, named in a hook | Nothing is notified |
+| Copy | `copy` action, named in a hook | The file stays only where it landed |
+| Checks | `check` action, named in a hook | Any file is accepted |
+| PGP decrypt or encrypt | `pgp_decrypt` or `pgp_encrypt` action, named in a hook | Files are stored as they arrive |
+| Scheduled pull or push | `remotes` and `transfers` | Nothing is fetched or sent on a schedule |
+| Moving refused files | `push.rejected` | A refused file stays and fails every run |
+| Read-only API | `http.tokens` | `/api/v1/` is off |
+| Admin calls | `http.admin.tokens` and `http.admin.allow` | Those calls answer 404 |
+| Tracing | `OTEL_EXPORTER_OTLP_ENDPOINT` | No traces are sent |
+| Server IP allowlist | `server.allow_ips` | Any IP may try to log in |
+| Account IP allowlist | `accounts[].allow_ips` | Any IP allowed by the server |
+| Two-step login | `auth.mode: all` | One of key or password is enough |
+| Sessions per account | `max_sessions` | Limited only by `max_connections` |
+| File name rules | `patterns` | Any name |
+| File size limit | `max_file_size` | No limit; only the free disk check applies |
+| Banner | `server.banner` | None |
+| Config from git | Git-sync (`gitSync.enabled` in Helm) | You deliver the file yourself |
+| Prometheus and Grafana on Kubernetes | Helm `metrics.*` | Metrics are there, but nothing collects them |
+| Ingress, autoscaling, PodDisruptionBudget | Helm values | Not created |
+
+An action does nothing just by being defined: a hook must name it. To pause one
+without deleting it, use `enabled: false`. The same setting pauses a transfer.

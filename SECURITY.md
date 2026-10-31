@@ -32,7 +32,7 @@ Security fixes go into the latest minor release. Upgrade to it to receive them.
 
 | Version | Supported |
 |---|---|
-| 0.3.x | ✅ |
+| 0.4.x | ✅ |
 | older | ❌ |
 
 ## In scope
@@ -56,7 +56,7 @@ Security fixes go into the latest minor release. Upgrade to it to receive them.
 - Problems that need someone who can already change the config in git, read
   the host's secrets or run code in the cluster.
 - Missing protections that the docs mark as your platform's job (network
-  firewalls, the TLS Ingress in front of the UI, log retention, malware
+  firewalls, the TLS Ingress in front of the API, log retention, malware
   scanning).
 - Denial of service through sheer traffic volume. The built-in limits and
   allowlists reduce it, but they can't replace network-level protection.
