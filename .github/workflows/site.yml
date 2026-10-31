@@ -17,8 +17,15 @@ on:
       - "SECURITY.md"
       - ".github/workflows/site.yml"
 
+  workflow_dispatch:
+
 permissions:
   contents: read
+
+# Deployments run one at a time, and a running one is never cancelled.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -43,7 +50,7 @@ jobs:
           path: site/dist
 
   deploy:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:
